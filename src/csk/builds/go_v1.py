@@ -6779,6 +6779,316 @@ def _macos_loaded_python_runtime_image() -> Path:
     )
 
 
+@dataclass(frozen=True)
+class _ProcMapEntry:
+    """One kernel-reported mapping from ``/proc/self/maps``."""
+
+    start: int
+    end: int
+    perms: str
+    offset: int
+    device: int
+    inode: int
+    pathname: str | None
+
+
+_MAX_PROC_MAPS_BYTES: Final = 1024 * 1024
+_MAX_PROC_MAPS_LINES: Final = 4096
+
+
+def _parse_proc_maps(text: str) -> tuple[_ProcMapEntry, ...]:
+    """Parse ``/proc/self/maps`` text; any malformed line refuses.
+
+    Pure function of the maps text so fixtures can prove selection and
+    refusal without a Linux process. Device numbers are rebuilt with
+    ``os.makedev`` so they compare directly against ``stat`` results.
+    """
+    if len(text.encode("utf-8", "surrogateescape")) > _MAX_PROC_MAPS_BYTES:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker process maps exceed their size bound",
+        )
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines or len(lines) > _MAX_PROC_MAPS_LINES:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker process maps are empty or exceed their line bound",
+        )
+    entries: list[_ProcMapEntry] = []
+    for line in lines:
+        fields = line.split(None, 5)
+        if len(fields) < 5:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                f"cannot parse worker process maps line: {line!r}",
+            )
+        try:
+            start_text, end_text = fields[0].split("-", 1)
+            start, end = int(start_text, 16), int(end_text, 16)
+            offset = int(fields[2], 16)
+            major_text, minor_text = fields[3].split(":", 1)
+            device = os.makedev(int(major_text, 16), int(minor_text, 16))
+            inode = int(fields[4], 10)
+        except ValueError as exc:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                f"cannot parse worker process maps line: {line!r}",
+            ) from exc
+        if end <= start or len(fields[1]) != 4 or inode < 0:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                f"cannot parse worker process maps line: {line!r}",
+            )
+        pathname = fields[5].strip() if len(fields) == 6 else None
+        entries.append(
+            _ProcMapEntry(
+                start=start, end=end, perms=fields[1], offset=offset,
+                device=device, inode=inode, pathname=pathname or None,
+            )
+        )
+    return tuple(entries)
+
+
+def _proc_mapping_for_address(
+    entries: Sequence[_ProcMapEntry], address: int, label: str
+) -> _ProcMapEntry:
+    """Select the single file mapping that owns ``address`` or refuse."""
+    matches = [entry for entry in entries if entry.start <= address < entry.end]
+    if not matches:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"no mapping in /proc/self/maps contains {label}",
+        )
+    if len(matches) > 1:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"ambiguous mapping owner for {label}: "
+            "more than one mapping contains its address",
+        )
+    owner = matches[0]
+    if owner.pathname is None or not owner.pathname.startswith("/"):
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"anonymous mapping owns {label}",
+        )
+    if owner.pathname.endswith(" (deleted)"):
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"deleted mapping owns {label}: {owner.pathname}",
+        )
+    return owner
+
+
+def _refuse_ambiguous_python_mappings(
+    entries: Sequence[_ProcMapEntry], owner: _ProcMapEntry
+) -> None:
+    others = {
+        (entry.device, entry.inode)
+        for entry in entries
+        if entry.pathname
+        and Path(entry.pathname.removesuffix(" (deleted)")).name.startswith(
+            "libpython"
+        )
+        and (entry.device, entry.inode) != (owner.device, owner.inode)
+    }
+    if others:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "ambiguous Python runtime owner: "
+            "another libpython image is mapped",
+        )
+
+
+def _identity_from_open_handle(
+    path: Path,
+    handle: BinaryIO,
+    expected: tuple[int, int],
+    label: str,
+) -> _ExecutableIdentity:
+    """Hash an already-open image, requiring its kernel identity."""
+    try:
+        opened = os.fstat(handle.fileno())
+    except OSError as exc:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"{label} cannot be inspected",
+        ) from exc
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or (opened.st_dev, opened.st_ino) != expected
+        or not 0 < opened.st_size <= _MAX_MANAGER_EXECUTABLE_BYTES
+    ):
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"{label} was replaced at its path or exceeds its bound",
+        )
+    digest = hashlib.sha256()
+    remaining = opened.st_size
+    try:
+        while remaining:
+            chunk = handle.read(min(remaining, 64 * 1024))
+            if not chunk:
+                raise GoV1Error(
+                    CODE_WORKER_IDENTITY_INVALID,
+                    f"{label} shrank while hashing",
+                )
+            remaining -= len(chunk)
+            digest.update(chunk)
+        if handle.read(1):
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                f"{label} grew while hashing",
+            )
+    except OSError as exc:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"{label} cannot be read",
+        ) from exc
+    return _ExecutableIdentity(
+        path=path,
+        sha256="sha256:" + digest.hexdigest(),
+        size=opened.st_size,
+        device=opened.st_dev,
+        inode=opened.st_ino,
+        mode=stat.S_IMODE(opened.st_mode),
+    )
+
+
+def _linux_process_identity(
+    _proc_exe: Path = Path("/proc/self/exe"),
+    *,
+    _readlink: Callable[[Path], str] = os.readlink,
+) -> _ExecutableIdentity:
+    """Identity of the mapped process image, hashed through procfs."""
+    try:
+        target = _readlink(_proc_exe)
+    except OSError as exc:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker process image is unavailable: procfs is missing",
+        ) from exc
+    if target.endswith(" (deleted)"):
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker process image is a deleted mapping",
+        )
+    if not Path(target).is_absolute():
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker process image is a nonabsolute mapping",
+        )
+    try:
+        info = os.stat(_proc_exe)
+        # Opening through procfs hashes the mapped file itself, not
+        # whatever file sits at the target path when the proof runs.
+        with open(_proc_exe, "rb", buffering=0) as handle:
+            return _identity_from_open_handle(
+                Path(target), handle,
+                (info.st_dev, info.st_ino), "worker process image",
+            )
+    except GoV1Error:
+        raise
+    except OSError as exc:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker process image is unavailable: procfs is missing",
+        ) from exc
+
+
+def _linux_loaded_identities(
+    *,
+    _proc_exe: Path = Path("/proc/self/exe"),
+    _proc_maps: Path = Path("/proc/self/maps"),
+    _maps_text: str | None = None,
+    _address: int | None = None,
+    _version_info: tuple[int, int] | None = None,
+) -> tuple[_ExecutableIdentity, _ExecutableIdentity]:
+    """Kernel identities of the loaded process and Python runtime images.
+
+    The runtime owner is the single ``/proc/self/maps`` mapping that
+    contains the ``Py_GetVersion`` address, with its kernel device and
+    inode; the process image comes from ``/proc/self/exe`` opened
+    through procfs. A deleted, anonymous, replaced or ambiguous owner
+    refuses. Nothing is taken from loader or argv strings.
+    """
+    version = _version_info or sys.version_info[:2]
+    if tuple(version) != (3, 14):
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"worker Python version {version[0]}.{version[1]} is "
+            "unsupported: profile requires distribution CPython 3.14",
+        )
+    process = _linux_process_identity(_proc_exe)
+    if _maps_text is None:
+        try:
+            payload = bytearray()
+            with open(_proc_maps, "rb", buffering=0) as handle:
+                while chunk := handle.read(64 * 1024):
+                    payload.extend(chunk)
+                    if len(payload) > _MAX_PROC_MAPS_BYTES:
+                        break
+        except OSError as exc:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "worker process maps are unavailable: procfs is missing",
+            ) from exc
+        maps_text = os.fsdecode(bytes(payload))
+    else:
+        maps_text = _maps_text
+    entries = _parse_proc_maps(maps_text)
+    address = _address
+    if address is None:
+        address = ctypes.cast(
+            ctypes.pythonapi.Py_GetVersion, ctypes.c_void_p
+        ).value
+    if not address:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "cannot determine the loaded Py_GetVersion address",
+        )
+    owner = _proc_mapping_for_address(entries, address, "Py_GetVersion")
+    _refuse_ambiguous_python_mappings(entries, owner)
+    if (owner.device, owner.inode) == (process.device, process.inode):
+        return process, process
+    assert owner.pathname is not None
+    try:
+        with open(owner.pathname, "rb", buffering=0) as handle:
+            runtime = _identity_from_open_handle(
+                Path(owner.pathname), handle,
+                (owner.device, owner.inode),
+                "worker Python runtime image",
+            )
+    except GoV1Error:
+        raise
+    except OSError as exc:
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            "worker Python runtime image cannot be opened",
+        ) from exc
+    return process, runtime
+
+
+def _linux_loaded_process_image(
+    *, _proc_exe: Path = Path("/proc/self/exe")
+) -> Path:
+    return _linux_process_identity(_proc_exe).path
+
+
+def _linux_loaded_python_runtime_image(
+    *,
+    _proc_exe: Path = Path("/proc/self/exe"),
+    _proc_maps: Path = Path("/proc/self/maps"),
+    _maps_text: str | None = None,
+    _address: int | None = None,
+    _version_info: tuple[int, int] | None = None,
+) -> Path:
+    return _linux_loaded_identities(
+        _proc_exe=_proc_exe, _proc_maps=_proc_maps,
+        _maps_text=_maps_text, _address=_address,
+        _version_info=_version_info,
+    )[1].path
+
+
 def _windows_loaded_image(handle: int, label: str) -> Path:
     kernel32 = _windows_kernel32()
     get_name = kernel32.GetModuleFileNameW
@@ -6806,8 +7116,19 @@ def _windows_loaded_image(handle: int, label: str) -> Path:
     )
 
 
-def _worker_native_runtime_proof() -> dict[str, str]:
+def _worker_native_runtime_proof() -> dict[str, object]:
     platform = inventory_platform()
+    if platform == PLATFORM_LINUX:
+        # Linux sends the full kernel identities (path, device, inode,
+        # size, mode, content hash) from /proc/self/maps and
+        # /proc/self/exe, not paths alone. inventory_platform() still
+        # refuses on Linux, so this branch stays unreachable in
+        # production while admission is closed.
+        process_identity, runtime_identity = _linux_loaded_identities()
+        return {
+            "process_image": process_identity.to_dict(),
+            "runtime_image": runtime_identity.to_dict(),
+        }
     if platform == PLATFORM_MACOS:
         process_image = _macos_loaded_process_image()
         runtime_image = _macos_loaded_python_runtime_image()
@@ -6857,6 +7178,7 @@ def validate_worker_runtime(
     *,
     expected_launch_context: _WorkerLaunchContext | None = None,
     expected_parent_pid: int | None = None,
+    _platform: str | None = None,
 ) -> None:
     """Prove the worker's whole startup TCB is the bound manager TCB."""
 
@@ -6927,26 +7249,47 @@ def validate_worker_runtime(
         {"process_image", "runtime_image"},
         "worker native runtime proof",
     )
-    process_image = Path(
-        _require_string(
-            native.get("process_image"),
-            "worker process image",
-        )
+    linux_proof = (
+        _platform == PLATFORM_LINUX
+        if _platform is not None
+        else sys.platform == "linux"
     )
-    runtime_image = Path(
-        _require_string(
-            native.get("runtime_image"),
-            "worker Python runtime image",
-        )
+
+    def _check_native_image(
+        value: object, retained: _ExecutableIdentity, label: str
+    ) -> None:
+        if isinstance(value, Mapping):
+            # Full kernel identity: device, inode and content hash must
+            # equal the retained pre-launch identity, not only the path.
+            if _executable_identity_from_mapping(value, label) != retained:
+                raise GoV1Error(
+                    CODE_WORKER_IDENTITY_INVALID,
+                    "worker loaded an interpreter image outside the "
+                    "bound identity",
+                )
+            return
+        if linux_proof:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "worker native runtime proof does not carry kernel "
+                "image identities",
+            )
+        if Path(_require_string(value, label)) != retained.path:
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "worker loaded an interpreter image outside the bound identity",
+            )
+
+    _check_native_image(
+        native.get("process_image"),
+        identity.interpreter.runtime.process_image,
+        "worker process image",
     )
-    if (
-        process_image != identity.interpreter.runtime.process_image.path
-        or runtime_image != identity.interpreter.runtime.runtime_image.path
-    ):
-        raise GoV1Error(
-            CODE_WORKER_IDENTITY_INVALID,
-            "worker loaded an interpreter image outside the bound identity",
-        )
+    _check_native_image(
+        native.get("runtime_image"),
+        identity.interpreter.runtime.runtime_image,
+        "worker Python runtime image",
+    )
     executable = Path(
         _require_string(runtime.get("executable"), "worker interpreter")
     )
@@ -8699,6 +9042,8 @@ def _verify_artifact(
     artifact_rel: str,
     limit: int,
     platform: str,
+    *,
+    _host_machine: str | None = None,
 ) -> ArtifactMetadata:
     try:
         stage_entries = list(stage.iterdir())
@@ -8774,8 +9119,8 @@ def _verify_artifact(
                         "artifact_mutated",
                         "staged output shrank while hashing",
                     )
-                if not header:
-                    header = chunk[:4]
+                if len(header) < 64:
+                    header = (header + chunk)[:64]
                 remaining -= len(chunk)
                 digest.update(chunk)
             if handle.read(1):
@@ -8790,7 +9135,9 @@ def _verify_artifact(
             "artifact_unreadable",
             "cannot hash staged output",
         ) from exc
-    if not _native_executable_header(header, platform):
+    if not _native_executable_header(
+        header, platform, _host_machine=_host_machine
+    ):
         raise GoV1Error(
             "artifact_output_invalid",
             "staged output is not a native executable",
@@ -8811,16 +9158,49 @@ def _verify_artifact(
     )
 
 
-def _native_executable_header(header: bytes, platform: str) -> bool:
+# Host ELF targets for artifact validation. Adding AArch64 later is one row:
+# "aarch64"/"arm64" -> 183, with its own native qualification.
+_LINUX_ELF_HOST_MACHINES: Final[Mapping[str, int]] = MappingProxyType(
+    {"x86_64": 62, "amd64": 62}
+)
+
+
+def _linux_elf_artifact_header(
+    header: bytes, *, _host_machine: str | None = None
+) -> bool:
+    """Check ELF class, encoding, machine and type without executing it."""
+    expected = _LINUX_ELF_HOST_MACHINES.get(
+        (_host_machine or platform.machine()).casefold()
+    )
+    # An ELF64 header is 64 bytes; anything shorter is truncated.
+    if expected is None or len(header) < 64:
+        return False
+    if header[:4] != b"\x7fELF":
+        return False
+    # ELF64, little-endian, current version, SysV or Linux ABI,
+    # EI_ABIVERSION 0 and zero EI_PAD.
+    if header[4] != 2 or header[5] != 1 or header[6] != 1 or header[7] not in (0, 3):
+        return False
+    if header[8:16] != bytes(8):
+        return False
+    kind, machine = struct.unpack_from("<HH", header, 16)
+    (e_version,) = struct.unpack_from("<I", header, 20)
+    (e_ehsize,) = struct.unpack_from("<H", header, 52)
+    if e_version != 1 or e_ehsize != 64:
+        return False
+    return kind in (2, 3) and machine == expected
+
+
+def _native_executable_header(
+    header: bytes, platform: str, *, _host_machine: str | None = None
+) -> bool:
     if platform == PLATFORM_WINDOWS:
         return header.startswith(b"MZ")
     if platform == PLATFORM_LINUX:
-        # Format-only, like the existing PE/Mach-O checks: target and tuning
-        # belong to the admitted toolchain, not an interpreter ELF parser.
-        return header.startswith(b"\x7fELF")
+        return _linux_elf_artifact_header(header, _host_machine=_host_machine)
     if platform != PLATFORM_MACOS or len(header) < 4:
         return False
-    return header in {
+    return header[:4] in {
         b"\xfe\xed\xfa\xce",
         b"\xfe\xed\xfa\xcf",
         b"\xce\xfa\xed\xfe",

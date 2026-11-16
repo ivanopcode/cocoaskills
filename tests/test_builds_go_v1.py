@@ -1634,6 +1634,56 @@ def test_worker_runtime_proof_rejects_unbound_startup(case: str, tmp_path: Path)
     assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
 
 
+# The Linux session validation compares full kernel identities (device,
+# inode and hash), so a right-path image tampered in any one of those
+# fields (runtime or process) and a path-only proof both refuse next to
+# the exact retained positive control.
+def test_worker_runtime_proof_linux_kernel_identities(tmp_path: Path):
+    plan, _, _ = _worker_fixture(tmp_path)
+    identity = plan.executable
+    proof = copy.deepcopy(_runtime_proof(identity))
+    runtime = identity.interpreter.runtime
+    proof["native"] = {
+        "process_image": runtime.process_image.to_dict(),
+        "runtime_image": runtime.runtime_image.to_dict(),
+    }
+    go_v1.validate_worker_runtime(proof, identity, _platform="linux")
+
+    def flip_digest(digest: str) -> str:
+        return digest[:7] + ("0" if digest[7] != "0" else "1") + digest[8:]
+
+    plants = [
+        ("runtime_image", "inode", runtime.runtime_image.inode + 1),
+        ("runtime_image", "device", runtime.runtime_image.device + 1),
+        (
+            "runtime_image",
+            "sha256",
+            flip_digest(runtime.runtime_image.sha256),
+        ),
+        ("process_image", "device", runtime.process_image.device + 1),
+    ]
+    for image_name, field, value in plants:
+        tampered = copy.deepcopy(proof)
+        cast(dict[str, dict[str, object]], tampered["native"])[
+            image_name
+        ][field] = value
+        with pytest.raises(
+            go_v1.GoV1Error, match="outside the bound identity"
+        ) as raised:
+            go_v1.validate_worker_runtime(
+                tampered, identity, _platform="linux"
+            )
+        assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+
+    path_only = copy.deepcopy(_runtime_proof(identity))
+    with pytest.raises(
+        go_v1.GoV1Error, match="does not carry kernel image identities"
+    ):
+        go_v1.validate_worker_runtime(path_only, identity, _platform="linux")
+
+    go_v1.validate_worker_runtime(proof, identity, _platform="linux")
+
+
 def test_worker_runtime_proof_accepts_bound_windows_launcher_zip_member(
     tmp_path: Path,
 ):

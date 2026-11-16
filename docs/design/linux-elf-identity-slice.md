@@ -6,14 +6,46 @@ Baseline: `e69b5755a717413b5f985d2da577ddb469ae7ae7`.
 The experimental `_elf_identity` and `_linux_identity` modules implement the
 image-selection portion of sections 4 and 7, row 2, of `linux-go-v1.md`.
 Neither is imported by build admission. `supports_external_builds`,
-`inventory_platform`, interpreter dispatch and `_native_executable_header`
-remain unchanged. Existing macOS and Windows runtime selection is unchanged.
+`inventory_platform` and interpreter dispatch remain unchanged. Existing
+macOS and Windows runtime selection is unchanged.
 
 The baseline citations still name the current identity functions. The old
 macOS resolver still scans for dylibs; this slice does not reuse that heuristic.
 Linux has an explicit platform field in its separate result type. Integration
 with `_InterpreterIdentity`, startup trees, venv configuration, mutation watches
 and the worker's loaded-segment proof belongs to subsequent slices.
+
+U3 adds the interpreter-identity adapter and the loaded-image proof in
+dormant form; startup trees and mutation watches remain later slices.
+`resolve_linux_interpreter_identity` in `_linux_identity.py` narrows the
+generic resolver to the named profile: the canonical base executable must be
+`/usr/bin/python3.14` with prefix `/usr`, root-owned and not writable by group
+or other, on glibc and x86-64 (the single host-machine table lives in
+`go_v1.py`). A package venv is admitted through a retained `pyvenv.cfg` whose
+`home` must name the base executable's directory, while `python_home` stays
+the prefix the launch consumes. A relocatable `$ORIGIN` layout, a
+non-distribution location (pyenv, `/usr/local`, another version's binary),
+another machine or caller-named version, and a non-glibc loader refuse by
+name. The adapter returns the `_InterpreterIdentity` the worker launch
+consumes, together with the retained loader, cache/preload and dependency
+identities in `watch_paths()`, including every retained image's links and
+their parent directories. `prove_loaded_identities` and the worker session
+proof share one helper in `go_v1.py` that takes both owners from kernel data:
+the process image is `/proc/self/exe` opened through procfs, and the runtime
+owner is the single `/proc/self/maps` mapping containing the `Py_GetVersion`
+address, with its kernel device and inode, hashed only after the opened file
+matches that device and inode. A deleted, anonymous, replaced or ambiguous
+mapping, a maps parse failure, missing procfs, or a worker Python version
+other than 3.14 refuses. The Linux branch of the worker native runtime proof
+sends those full identities (device, inode, size, mode and content hash), and
+the manager compares them against the retained process and runtime images,
+not paths alone. `go_v1.py` also gains a real ELF64 artifact check: 64-byte
+header, class, data encoding, version fields, EI_ABIVERSION 0 and zero
+EI_PAD, machine and type against the host target table (AArch64 is one
+later row in that one table).
+`inventory_platform()`, `supports_external_builds()` and interpreter dispatch
+are unchanged, so Linux admission stays closed and the new code is reachable
+only from tests until a later unit opens it.
 
 The parser accepts little-endian ELF64 x86-64 and AArch64 only. Bounds are
 128 MiB per image, 256 program headers, 4096 dynamic entries, 4 MiB strings,
