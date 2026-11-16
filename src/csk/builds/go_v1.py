@@ -293,6 +293,35 @@ _MACOS_IDENTITY_FD_HEADROOM: Final = 256
 _MACOS_FIXED_DESCRIPTOR_CAPACITY: Final = _WORKER_LAUNCH_FDS[-1] + 1
 _MAX_RETAINED_IDENTITY_PATHS: Final = 50_000
 
+# Linux inotify event bits (inotify(7)); only the retained-identity adapter
+# below consumes them, through libc via ctypes.
+_LINUX_IN_MODIFY: Final = 0x0000_0002
+_LINUX_IN_ATTRIB: Final = 0x0000_0004
+_LINUX_IN_CLOSE_WRITE: Final = 0x0000_0008
+_LINUX_IN_MOVED_FROM: Final = 0x0000_0040
+_LINUX_IN_MOVED_TO: Final = 0x0000_0080
+_LINUX_IN_CREATE: Final = 0x0000_0100
+_LINUX_IN_DELETE: Final = 0x0000_0200
+_LINUX_IN_DELETE_SELF: Final = 0x0000_0400
+_LINUX_IN_MOVE_SELF: Final = 0x0000_0800
+_LINUX_IN_UNMOUNT: Final = 0x0000_2000
+_LINUX_IN_Q_OVERFLOW: Final = 0x0000_4000
+_LINUX_IN_IGNORED: Final = 0x0000_8000
+_LINUX_IN_DONT_FOLLOW: Final = 0x0200_0000
+_LINUX_INOTIFY_MUTATION_MASK: Final = (
+    _LINUX_IN_MODIFY
+    | _LINUX_IN_ATTRIB
+    | _LINUX_IN_CLOSE_WRITE
+    | _LINUX_IN_MOVED_FROM
+    | _LINUX_IN_MOVED_TO
+    | _LINUX_IN_CREATE
+    | _LINUX_IN_DELETE
+    | _LINUX_IN_DELETE_SELF
+    | _LINUX_IN_MOVE_SELF
+)
+_LINUX_INOTIFY_EVENT_STRUCT: Final = struct.Struct("iIII")
+_LINUX_INOTIFY_READ_LIMIT: Final = 4 * 1024 * 1024
+
 _MESSAGE_KINDS: Final[frozenset[str]] = frozenset(
     {
         "request",
@@ -4059,8 +4088,311 @@ def _reject_identity_named_streams(path: Path, label: str) -> None:
         )
 
 
+@dataclass(frozen=True)
+class _LinuxRetainedIdentity:
+    """Baseline identity of one retained path for the Linux adapter.
+
+    The fields are the portable identity fields: device, inode, size,
+    mtime, ctime, mode and content hash.  Regular files carry a
+    ``sha256:`` digest of their exact bytes, links a digest of the link
+    target, and every other kind an empty digest, as in the tree
+    identities.  Equality of the whole record is the comparison rule.
+    """
+
+    path: Path
+    device: int
+    inode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    mode: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _LinuxInotifyEvent:
+    wd: int
+    mask: int
+    cookie: int
+    name: str
+
+
+@dataclass
+class _LinuxWatchTarget:
+    """One inotify watch: a retained path and/or a parent of retained paths."""
+
+    path: Path
+    retained: Path | None = None
+    children: dict[str, Path] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _LinuxInotifyVerdict:
+    changed: tuple[Path, ...] = ()
+    fatal: str | None = None
+
+
+class _LinuxInotifyBoundExceeded(OSError):
+    """The read bound was hit; carries the events read before refusing."""
+
+    def __init__(self, events: tuple[_LinuxInotifyEvent, ...]):
+        super().__init__("Linux identity event queue exceeds its bound")
+        self.events = events
+
+
+def _linux_inotify_libc() -> Any:
+    libc = ctypes.CDLL(None, use_errno=True)
+    init1 = libc.inotify_init1
+    init1.argtypes = [ctypes.c_int]
+    init1.restype = ctypes.c_int
+    add_watch = libc.inotify_add_watch
+    add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    add_watch.restype = ctypes.c_int
+    return libc
+
+
+def _linux_inotify_init(libc: Any) -> int:
+    # inotify_init1 takes the O_NONBLOCK/O_CLOEXEC values of the host ABI.
+    os_api = cast(Any, os)
+    ctypes.set_errno(0)
+    descriptor = int(libc.inotify_init1(os_api.O_NONBLOCK | os_api.O_CLOEXEC))
+    if descriptor < 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), "inotify_init1")
+    return descriptor
+
+
+def _linux_inotify_add_watch(
+    libc: Any,
+    descriptor: int,
+    path: Path,
+    mask: int,
+) -> int:
+    ctypes.set_errno(0)
+    wd = int(libc.inotify_add_watch(descriptor, os.fsencode(path), mask))
+    if wd < 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), os.fspath(path))
+    return wd
+
+
+def _linux_retained_watch_mask(*, is_directory: bool) -> int:
+    mask = (
+        _LINUX_IN_ATTRIB
+        | _LINUX_IN_DELETE_SELF
+        | _LINUX_IN_MOVE_SELF
+        | _LINUX_IN_DONT_FOLLOW
+    )
+    if is_directory:
+        # Content bits on a directory watch fire only for its children,
+        # which carry their own watches; keep the entry bits instead.
+        mask |= (
+            _LINUX_IN_CREATE
+            | _LINUX_IN_DELETE
+            | _LINUX_IN_MOVED_FROM
+            | _LINUX_IN_MOVED_TO
+        )
+    else:
+        mask |= _LINUX_IN_MODIFY | _LINUX_IN_CLOSE_WRITE
+    return mask
+
+
+def _linux_parent_watch_mask() -> int:
+    # Entry and self bits only: retained names have their own watches, and
+    # per-child content bits would flood the queue from busy parents.
+    return (
+        _LINUX_IN_CREATE
+        | _LINUX_IN_DELETE
+        | _LINUX_IN_MOVED_FROM
+        | _LINUX_IN_MOVED_TO
+        | _LINUX_IN_DELETE_SELF
+        | _LINUX_IN_MOVE_SELF
+    )
+
+
+def _linux_watch_targets(paths: Sequence[Path]) -> tuple[_LinuxWatchTarget, ...]:
+    by_path: dict[Path, _LinuxWatchTarget] = {}
+    for path in paths:
+        target = by_path.setdefault(path, _LinuxWatchTarget(path=path))
+        target.retained = path
+        if path.name:
+            parent = by_path.setdefault(
+                path.parent, _LinuxWatchTarget(path=path.parent)
+            )
+            parent.children[path.name] = path
+    return tuple(by_path.values())
+
+
+def _parse_linux_inotify_buffer(data: bytes) -> tuple[_LinuxInotifyEvent, ...]:
+    events: list[_LinuxInotifyEvent] = []
+    offset = 0
+    header = _LINUX_INOTIFY_EVENT_STRUCT.size
+    while offset < len(data):
+        if len(data) - offset < header:
+            raise ValueError("truncated inotify event header")
+        wd, mask, cookie, name_length = _LINUX_INOTIFY_EVENT_STRUCT.unpack_from(
+            data, offset
+        )
+        offset += header
+        if name_length > len(data) - offset:
+            raise ValueError("truncated inotify event name")
+        raw_name = data[offset : offset + name_length].split(b"\x00", 1)[0]
+        offset += name_length
+        events.append(
+            _LinuxInotifyEvent(
+                wd=wd,
+                mask=mask,
+                cookie=cookie,
+                name=os.fsdecode(raw_name),
+            )
+        )
+    return tuple(events)
+
+
+def _drain_linux_inotify(descriptor: int) -> tuple[_LinuxInotifyEvent, ...]:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        try:
+            chunk = os.read(descriptor, 64 * 1024)
+        except BlockingIOError:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > _LINUX_INOTIFY_READ_LIMIT:
+            try:
+                read_events = _parse_linux_inotify_buffer(b"".join(chunks))
+            except ValueError:
+                read_events = ()
+            raise _LinuxInotifyBoundExceeded(read_events)
+    if not chunks:
+        return ()
+    return _parse_linux_inotify_buffer(b"".join(chunks))
+
+
+def _classify_linux_inotify_events(
+    events: Sequence[_LinuxInotifyEvent],
+    targets_by_wd: Mapping[int, _LinuxWatchTarget],
+) -> _LinuxInotifyVerdict:
+    changed: set[Path] = set()
+    fatal: str | None = None
+    for event in events:
+        if event.mask & _LINUX_IN_Q_OVERFLOW:
+            fatal = fatal or "Linux identity event queue overflowed"
+            continue
+        target = targets_by_wd.get(event.wd)
+        if target is None:
+            fatal = fatal or "Linux identity event for an unknown watch"
+            continue
+        if event.mask & _LINUX_IN_UNMOUNT:
+            fatal = fatal or "Linux identity watch lost its filesystem"
+        if event.mask & _LINUX_IN_IGNORED:
+            fatal = fatal or "Linux identity watch was removed by the kernel"
+        if not event.mask & _LINUX_INOTIFY_MUTATION_MASK:
+            continue
+        if event.name:
+            retained = target.children.get(event.name)
+            if retained is not None:
+                changed.add(retained)
+            elif target.retained is not None and event.mask & (
+                _LINUX_IN_CREATE
+                | _LINUX_IN_DELETE
+                | _LINUX_IN_MOVED_FROM
+                | _LINUX_IN_MOVED_TO
+            ):
+                # A retained directory reports entry changes under its own
+                # watch, as a macOS directory vnode does; content writes to
+                # a non-retained child are not entry changes.
+                changed.add(target.retained)
+            continue
+        if target.retained is not None:
+            changed.add(target.retained)
+        elif event.mask & (_LINUX_IN_DELETE_SELF | _LINUX_IN_MOVE_SELF):
+            changed.update(target.children.values())
+    if changed:
+        return _LinuxInotifyVerdict(changed=tuple(sorted(changed, key=os.fspath)))
+    return _LinuxInotifyVerdict(fatal=fatal)
+
+
+def _capture_linux_retained_identity(path: Path) -> _LinuxRetainedIdentity:
+    initial = path.lstat()
+    sha256 = ""
+    if stat.S_ISREG(initial.st_mode):
+        digest = hashlib.sha256()
+        with path.open("rb", buffering=0) as handle:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino)
+                != (initial.st_dev, initial.st_ino)
+                or opened.st_size != initial.st_size
+            ):
+                raise GoV1Error(
+                    CODE_WORKER_IDENTITY_INVALID,
+                    f"retained identity changed while opening: {path}",
+                )
+            remaining = opened.st_size
+            while remaining:
+                chunk = handle.read(min(remaining, 1024 * 1024))
+                if not chunk:
+                    raise GoV1Error(
+                        CODE_WORKER_IDENTITY_INVALID,
+                        f"retained identity shrank while hashing: {path}",
+                    )
+                remaining -= len(chunk)
+                digest.update(chunk)
+            if handle.read(1):
+                raise GoV1Error(
+                    CODE_WORKER_IDENTITY_INVALID,
+                    f"retained identity grew while hashing: {path}",
+                )
+        sha256 = "sha256:" + digest.hexdigest()
+    elif stat.S_ISLNK(initial.st_mode):
+        sha256 = "sha256:" + hashlib.sha256(
+            os.fsencode(os.readlink(path))
+        ).hexdigest()
+    record = _LinuxRetainedIdentity(
+        path=path,
+        device=initial.st_dev,
+        inode=initial.st_ino,
+        size=initial.st_size,
+        mtime_ns=initial.st_mtime_ns,
+        ctime_ns=initial.st_ctime_ns,
+        mode=initial.st_mode,
+        sha256=sha256,
+    )
+    after = path.lstat()
+    if (
+        after.st_dev != record.device
+        or after.st_ino != record.inode
+        or after.st_size != record.size
+        or after.st_mtime_ns != record.mtime_ns
+        or after.st_ctime_ns != record.ctime_ns
+        or after.st_mode != record.mode
+    ):
+        raise GoV1Error(
+            CODE_WORKER_IDENTITY_INVALID,
+            f"retained identity changed while hashing: {path}",
+        )
+    return record
+
+
+def _linux_retained_identities_changed(
+    baseline: Sequence[_LinuxRetainedIdentity],
+    current: Sequence[_LinuxRetainedIdentity],
+) -> tuple[Path, ...]:
+    current_by_path = {record.path: record for record in current}
+    return tuple(
+        record.path
+        for record in baseline
+        if current_by_path.get(record.path) != record
+    )
+
+
 class _IdentityMutationGuard:
-    """Detect macOS identity changes and lock Windows identities during use."""
+    """Detect macOS/Linux identity changes and lock Windows identities in use."""
 
     def __init__(self, platform: str, paths: Sequence[Path]):
         self.platform = platform
@@ -4079,6 +4411,9 @@ class _IdentityMutationGuard:
         self._mac_previous_nofile_limit: tuple[int, int] | None = None
         self._mac_lock_held = False
         self._windows_handles: list[int] = []
+        self._linux_fd: int | None = None
+        self._linux_targets_by_wd: dict[int, _LinuxWatchTarget] = {}
+        self._linux_baseline: tuple[_LinuxRetainedIdentity, ...] = ()
         self._closed = False
         self._close_error: BaseException | None = None
         try:
@@ -4088,6 +4423,8 @@ class _IdentityMutationGuard:
                 self._setup_macos()
             elif platform == PLATFORM_WINDOWS:
                 self._setup_windows()
+            elif platform == PLATFORM_LINUX:
+                self._setup_linux()
             else:
                 raise GoV1Error(
                     CODE_CONTROL_UNAVAILABLE,
@@ -4151,6 +4488,53 @@ class _IdentityMutationGuard:
             raise OSError("identity set has no retainable paths")
         queue_value.control(changes, 0, 0)
 
+    def _setup_linux(self) -> None:
+        # The caller still refuses Linux admission; this adapter is reached
+        # only by selecting the Linux platform explicitly, as tests do.
+        libc = _linux_inotify_libc()
+        descriptor = _linux_inotify_init(libc)
+        self._linux_fd = descriptor
+        for target in _linux_watch_targets(self.paths):
+            info = target.path.lstat()
+            mask = 0
+            if target.retained is not None:
+                mask |= _linux_retained_watch_mask(
+                    is_directory=stat.S_ISDIR(info.st_mode)
+                )
+            if target.children:
+                mask |= _linux_parent_watch_mask()
+            wd = _linux_inotify_add_watch(libc, descriptor, target.path, mask)
+            existing = self._linux_targets_by_wd.get(wd)
+            if existing is None:
+                self._linux_targets_by_wd[wd] = target
+                continue
+            # The kernel returns one wd per inode; merged targets need the
+            # union mask re-registered, because a repeated add replaces it.
+            if existing.retained is None:
+                existing.retained = target.retained
+            existing.children.update(target.children)
+            merged = 0
+            if existing.retained is not None:
+                merged |= _linux_retained_watch_mask(
+                    is_directory=stat.S_ISDIR(
+                        existing.path.lstat().st_mode
+                    )
+                )
+            if existing.children:
+                merged |= _linux_parent_watch_mask()
+            reregistered = _linux_inotify_add_watch(
+                libc, descriptor, existing.path, merged
+            )
+            if reregistered != wd:
+                raise OSError(
+                    "Linux identity watch merge changed its descriptor"
+                )
+        if not self._linux_targets_by_wd:
+            raise OSError("identity set has no retainable paths")
+        self._linux_baseline = tuple(
+            _capture_linux_retained_identity(path) for path in self.paths
+        )
+
     def _setup_windows(self) -> None:
         for path in self.paths:
             info = path.lstat()
@@ -4196,6 +4580,9 @@ class _IdentityMutationGuard:
         self._verify_retained_identity()
 
     def _verify_retained_identity(self) -> None:
+        if getattr(self, "_linux_fd", None) is not None:
+            self._verify_linux_retained_identity()
+            return
         if self._mac_queue is None:
             return
         try:
@@ -4233,6 +4620,78 @@ class _IdentityMutationGuard:
                 + ", ".join(changed[:8]),
             )
 
+    def _verify_linux_retained_identity(self) -> None:
+        descriptor = self._linux_fd
+        if descriptor is None:
+            return
+        events: tuple[_LinuxInotifyEvent, ...] = ()
+        drain_failure: BaseException | None = None
+        try:
+            events = _drain_linux_inotify(descriptor)
+        except _LinuxInotifyBoundExceeded as exc:
+            events = exc.events
+            drain_failure = exc
+        except BaseException as exc:
+            drain_failure = exc
+        verdict = _classify_linux_inotify_events(
+            events, self._linux_targets_by_wd
+        )
+        if events and _OBSERVATION_SINK.get() is not None:
+            _observe("identity-events", event_count=len(events))
+            for event in events[:128]:
+                target = self._linux_targets_by_wd.get(event.wd)
+                path: Path | None = None
+                if target is not None:
+                    path = target.children.get(event.name) or target.retained
+                _observe(
+                    "identity-event",
+                    path_index=(
+                        self.paths.index(path) if path in self.paths else -1
+                    ),
+                    event_flags=int(event.mask),
+                )
+        # The baseline comparison runs on every path, fatal verdicts and
+        # failed drains included, so a detectable change keeps the
+        # identity diagnostic instead of the mechanism one.
+        current: list[_LinuxRetainedIdentity] = []
+        missing: list[Path] = []
+        for path in self.paths:
+            try:
+                current.append(_capture_linux_retained_identity(path))
+            except GoV1Error:
+                raise
+            except OSError:
+                missing.append(path)
+        changed_paths = _linux_retained_identities_changed(
+            self._linux_baseline, current
+        )
+        changed = sorted(
+            {
+                os.fspath(path)
+                for path in (*verdict.changed, *changed_paths, *missing)
+            }
+        )
+        if changed:
+            if not missing and len(current) == len(self.paths):
+                # The rejection is reported once, as a drained macOS
+                # kqueue reports it once: later checkpoints compare
+                # against the records captured here.
+                self._linux_baseline = tuple(current)
+            raise GoV1Error(
+                CODE_WORKER_IDENTITY_INVALID,
+                "an execution identity changed while the worker ran: "
+                + ", ".join(changed[:8]),
+            )
+        if verdict.fatal is not None:
+            raise GoV1Error(CODE_CONTROL_UNAVAILABLE, verdict.fatal)
+        if drain_failure is not None:
+            failure = GoV1Error(
+                CODE_CONTROL_UNAVAILABLE,
+                "cannot verify the retained Linux execution identity set",
+            )
+            failure.__cause__ = drain_failure
+            raise failure
+
     def _release_handles(self) -> BaseException | None:
         failure: BaseException | None = None
         for descriptor in self._mac_fds:
@@ -4262,6 +4721,17 @@ class _IdentityMutationGuard:
         if self._mac_lock_held:
             _MACOS_IDENTITY_GUARD_LOCK.release()
             self._mac_lock_held = False
+        linux_fd = getattr(self, "_linux_fd", None)
+        if linux_fd is not None:
+            try:
+                os.close(linux_fd)
+            except OSError as exc:
+                if failure is None:
+                    failure = exc
+            self._linux_fd = None
+        if getattr(self, "_linux_targets_by_wd", None) is not None:
+            self._linux_targets_by_wd.clear()
+        self._linux_baseline = ()
         retained: list[int] = []
         for handle in self._windows_handles:
             try:
