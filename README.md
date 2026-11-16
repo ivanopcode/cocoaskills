@@ -152,7 +152,7 @@ AArch64 (glibc 2.43): `bootstrap`, `init`, `install`, повторный `instal
    csk bootstrap --if-missing --non-interactive --skills-root ~/skills --default-agents codex_cli
    ```
 
-   Укажите каталог репозиториев скиллов в `--skills-root`; в PowerShell используйте `"$HOME\skills"`. Без глобального config команды `config build-ssh add` и `list` завершаются с `Global config not found`. Флаг `--if-missing` сохраняет существующий config.
+   Укажите каталог репозиториев скиллов в `--skills-root`; в PowerShell используйте `"$HOME\skills"`. Без глобального config команды `config build-ssh` и `config build-https` (`add`, `list`) завершаются с `Global config not found`. Флаг `--if-missing` сохраняет существующий config.
 
    SSH остаётся транспортом по умолчанию. Если соответствующий ключ уже загружен в ваш ssh-agent, выполните:
 
@@ -163,6 +163,16 @@ AArch64 (glibc 2.43): `bootstrap`, `init`, `install`, повторный `instal
    Для незашифрованного файла без ssh-agent используйте `csk config build-ssh add git.example.com/team --identity ~/.ssh/build_key`.
 
    Команда сохраняет scope оператора. Режимы файла, ключи с passphrase, аппаратные ключи, ограничения платформ и другие ssh-agent, включая 1Password, описаны в [руководстве по SSH](docs/ssh-key-setup.md).
+
+   Если у вас есть доступ к приватному Git-хосту по HTTPS, а SSH-ключа нет, выберите HTTPS учётные данные для того же scope. Транспорт репозитория сборки задаёт объявленный скиллом URL: `https://` даёт HTTPS, `ssh://` и запись вида scp дают SSH. Запись для той же идентичности в машинном `source-policy.json` (путь задаёт `CSK_SOURCE_POLICY`) заменяет объявленный URL своими точками входа и может сменить транспорт; скоупы `build_ssh` и `build_https` только дают учётные данные уже выбранному транспорту. Подробности даёт [машинная транспортная политика](docs/skillfile-sources.md#машинная-транспортная-политика).
+
+   Чтобы повторно использовать HTTPS учётные данные, которые ваш Git уже хранит для хоста, выполните:
+
+   ```bash
+   csk config build-https add git.example.com/team --token-source git-credentials
+   ```
+
+   Чтобы сохранить новый токен со скрытым вводом, выполните `csk config build-https login git.example.com/team`. Команда сохраняет токен через Git credential helper и выбирает его для scope. Источники токена и удаление scope описаны в [справочнике CLI](docs/cli.md#csk-config-build-https) и в [руководстве по HTTPS репозиториям сборки](docs/external-build-repositories.md#private-https-build-repositories).
 
 3. Перейдите в каталог проекта и инициализируйте конфигурацию:
 
