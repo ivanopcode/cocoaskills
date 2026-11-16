@@ -15,6 +15,7 @@ _ALLOWED = {
     ("csk/builds/toolchain.py", "_check_goroot_release", 'MAX_VERSION_OUTPUT + 1'): "4097-byte VERSION probe, below the 64 KiB allocation bound.",
     ("csk/builds/go_v1.py", "_resolve_file_identity", 'min(remaining, 1024 * 1024)'): "Existing 1 MiB streaming digest chunks, clamped by remaining actual file size.",
     ("csk/builds/go_v1.py", "_verify_artifact", 'min(remaining, 1024 * 1024)'): "Existing 1 MiB streaming digest chunks, clamped by remaining actual artifact size.",
+    ("csk/builds/go_v1.py", "_capture_linux_retained_identity", 'min(remaining, 1024 * 1024)'): "1 MiB streaming digest chunks for the Linux retained identity, clamped by remaining actual file size.",
     ("csk/mcp_launchers.py", "_digest_stable", '1024 * 1024'): "Existing fixed 1 MiB streaming hash chunks, independent of an admission budget.",
     ("csk/transactions.py", "_digest_file", '1024 * 1024'): "Existing fixed 1 MiB streaming hash chunks, independent of an admission budget.",
     ("csk/transactions.py", "_entry_content_digest", '1024 * 1024'): "Existing fixed 1 MiB streaming hash chunks, independent of an admission budget.",
