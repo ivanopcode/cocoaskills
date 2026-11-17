@@ -349,7 +349,7 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert "if: github.event_name == 'pull_request'" in ordinary
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in ordinary
     assert 'python-version: "3.14"' in ordinary
-    assert ordinary.count("--ignore=") == 10
+    assert ordinary.count("--ignore=") == 17
     assert "--ignore=tests/test_protocol_conformance.py" in ordinary
     assert "--ignore=tests/test_go_build_e2e.py" in ordinary
     assert "--ignore=tests/test_mcp_launcher_recovery.py" in ordinary
@@ -358,6 +358,13 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     command_files = ["tests/test_cli.py", "tests/test_mcp_project_install.py",
                      "tests/test_ignore_mode_concurrency.py", "tests/test_mcp_status.py"]
     assert all("--ignore=" + file in ordinary for file in command_files)
+    # The largest measured core files run complete in their own partition so
+    # the Windows core wall time stays well inside the same 45-minute budget.
+    heavy_files = ["tests/test_canonical_urls.py", "tests/test_external_acquisition_pass.py",
+                   "tests/test_install.py", "tests/test_review_attacks.py",
+                   "tests/test_review_transport.py", "tests/test_runtime_tree_writes.py",
+                   "tests/test_source_closure_refresh.py"]
+    assert all("--ignore=" + file in ordinary for file in heavy_files)
     assert "-n 4 --dist=loadfile" in ordinary
     assert '${{ runner.temp }}/csk-ordinary' in ordinary
     assert '${{ runner.temp }}/csk-pytest-cache' in ordinary
@@ -367,7 +374,7 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     # All mandatory matrix partitions are complementary: core omits exactly
     # the complete files which their dedicated partitions run unfiltered.
     job = yaml.safe_load(workflow)["jobs"]["fast_ordinary"]
-    assert job["strategy"]["matrix"]["partition"] == ["core", "commands", "launcher-recovery", "source-transactions"]
+    assert job["strategy"]["matrix"]["partition"] == ["core", "core-heavy", "commands", "launcher-recovery", "source-transactions"]
     steps = {step["name"]: step for step in job["steps"]}
     core = steps["Run fast ordinary tests"]
     recovery = steps["Run complete launcher recovery and publication partition"]
@@ -379,6 +386,14 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
     assert [arg for arg in arguments if arg.startswith("tests/")] == [
         "tests/test_mcp_launcher_recovery.py", "tests/test_mcp_launcher_publication.py",
     ]
+    assert not any(arg.partition("=")[0] in {"--ignore", "--ignore-glob", "--deselect", "-k", "-m"}
+                   for arg in arguments)
+
+    heavy = steps["Run complete heavy core partition"]
+    assert heavy["if"] == "matrix.partition == 'core-heavy'"
+    command = shlex.split(heavy["run"])
+    arguments = command[command.index("pytest") + 1:]
+    assert [arg for arg in arguments if arg.startswith("tests/")] == heavy_files
     assert not any(arg.partition("=")[0] in {"--ignore", "--ignore-glob", "--deselect", "-k", "-m"}
                    for arg in arguments)
 
@@ -408,7 +423,11 @@ def test_pull_request_lane_is_event_separated_and_bounded() -> None:
 # The workflow checker rejects missing/unreachable partitions and filtered
 # commands; the unchanged workflow above is the matching positive control.
 @pytest.mark.parametrize("before,after", [
-    ("partition: [core, commands, launcher-recovery, source-transactions]", "partition: [core]"),
+    ("partition: [core, core-heavy, commands, launcher-recovery, source-transactions]", "partition: [core]"),
+    ("if: matrix.partition == 'core-heavy'", "if: matrix.partition == 'absent'"),
+    ("python -m pytest -v tests/test_canonical_urls.py",
+     "python -m pytest -v tests/test_canonical_urls.py -k omitted"),
+    ("          tests/test_runtime_tree_writes.py\n", ""),
     ("if: matrix.partition == 'commands'", "if: matrix.partition == 'absent'"),
     ("if: matrix.partition == 'launcher-recovery'", "if: matrix.partition == 'absent'"),
     ("if: matrix.partition == 'source-transactions'", "if: matrix.partition == 'absent'"),
