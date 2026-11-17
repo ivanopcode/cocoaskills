@@ -1557,12 +1557,14 @@ _RUNTIME_PROOF_CASES = (
 )
 
 
+# Each unbound-startup plant refuses under the macOS session selection
+# the synthetic fixture claims, next to the bound positive control.
 @pytest.mark.parametrize("case", _RUNTIME_PROOF_CASES, ids=_RUNTIME_PROOF_CASES)
 def test_worker_runtime_proof_rejects_unbound_startup(case: str, tmp_path: Path):
     plan, _, _ = _worker_fixture(tmp_path)
     identity = plan.executable
     proof = copy.deepcopy(_runtime_proof(identity))
-    go_v1.validate_worker_runtime(proof, identity)
+    go_v1.validate_worker_runtime(proof, identity, _platform=go_v1.PLATFORM_MACOS)
     flags = cast(dict[str, int], proof["flags"])
     modules = cast(list[dict[str, str]], proof["modules"])
     path = cast(list[str], proof["path"])
@@ -1630,7 +1632,7 @@ def test_worker_runtime_proof_rejects_unbound_startup(case: str, tmp_path: Path)
             module for module in modules if module["name"] != "csk.cli"
         ]
     with pytest.raises(go_v1.GoV1Error) as raised:
-        go_v1.validate_worker_runtime(proof, identity)
+        go_v1.validate_worker_runtime(proof, identity, _platform=go_v1.PLATFORM_MACOS)
     assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
 
 
@@ -1684,12 +1686,239 @@ def test_worker_runtime_proof_linux_kernel_identities(tmp_path: Path):
     go_v1.validate_worker_runtime(proof, identity, _platform="linux")
 
 
+# On a Linux host the session selection decides the proof shape: a
+# macOS-selected path proof and an unselected kernel-identity proof
+# validate, while the unselected path-only proof still refuses.
+def test_worker_runtime_proof_platform_selection_on_linux_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    plan, _, _ = _worker_fixture(tmp_path)
+    identity = plan.executable
+    proof = copy.deepcopy(_runtime_proof(identity))
+    runtime = identity.interpreter.runtime
+    kernel = copy.deepcopy(proof)
+    kernel["native"] = {
+        "process_image": runtime.process_image.to_dict(),
+        "runtime_image": runtime.runtime_image.to_dict(),
+    }
+    monkeypatch.setattr(sys, "platform", "linux")
+    go_v1.validate_worker_runtime(proof, identity, _platform=go_v1.PLATFORM_MACOS)
+    with pytest.raises(
+        go_v1.GoV1Error, match="does not carry kernel image identities"
+    ) as raised:
+        go_v1.validate_worker_runtime(proof, identity)
+    assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    go_v1.validate_worker_runtime(kernel, identity)
+    go_v1.validate_worker_runtime(proof, identity, _platform=go_v1.PLATFORM_MACOS)
+
+
+# A macOS scripted session under a Linux host reaches ready without
+# the host fallback; a site-enabled proof in the same setup refuses.
+def test_scripted_worker_on_linux_host_uses_session_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    plan, secret, nonce = _worker_fixture(tmp_path)
+    # Mirror the synthetic runtime the autouse fixture installs on a
+    # real Linux host, then force the host platform for the session.
+    # Windows keeps its own resolver, which dispatches on os.name.
+    if os.name != "nt":
+        monkeypatch.setattr(
+            go_v1,
+            "_resolve_interpreter_runtime",
+            lambda executable: go_v1._InterpreterRuntimeIdentity(
+                python_home=executable.path.parent.parent,
+                configuration=None,
+                base_executable=executable,
+                process_image=executable,
+                runtime_image=executable,
+            ),
+        )
+    monkeypatch.setattr(sys, "platform", "linux")
+    permit = go_v1._build_permit(secret, nonce, plan.build_argv)
+    executor = RecordingExecutor()
+    frames = _run_scripted_worker(
+        monkeypatch,
+        plan,
+        secret,
+        nonce,
+        _frame({"kind": "list", "nonce": nonce})
+        + _frame({"kind": "permit", "nonce": nonce, "permit": permit})
+        + _frame({"kind": "shutdown", "nonce": nonce}),
+        executor,
+    )
+    assert frames[-1] == {"worker_status": 0}
+    assert [frame["kind"] for frame in frames[:-1]] == [
+        "ready",
+        "list-result",
+        "build-result",
+    ]
+    poisoned = copy.deepcopy(_runtime_proof(plan.executable))
+    cast(dict[str, int], poisoned["flags"])["no_site"] = 0
+    refused = RecordingExecutor()
+    frames = _run_scripted_worker(
+        monkeypatch,
+        plan,
+        secret,
+        nonce,
+        _frame({"kind": "list", "nonce": nonce}),
+        refused,
+        runtime=poisoned,
+    )
+    assert [frame["kind"] for frame in frames[:-1]] == ["failure"]
+    assert frames[-2]["failure"]["code"] == go_v1.CODE_WORKER_IDENTITY_INVALID
+    assert frames[-1] == {"worker_status": 3}
+    assert refused.calls == []
+
+
+# The worker selects the proof shape from the host, not the plan it
+# was sent: on the emulated Linux host a macOS plan refuses before
+# ready (path-only for missing kernel identities, a full kernel
+# proof as not this host) with no control observation or Go process,
+# next to the same session reaching ready on its own host.
+def test_scripted_worker_refuses_plan_for_another_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    plan, secret, nonce = _worker_fixture(tmp_path)
+    # Mirror the synthetic runtime a real Linux host gets from the
+    # autouse fixture; Windows keeps its own os.name resolver.
+    if os.name != "nt":
+        monkeypatch.setattr(
+            go_v1,
+            "_resolve_interpreter_runtime",
+            lambda executable: go_v1._InterpreterRuntimeIdentity(
+                python_home=executable.path.parent.parent,
+                configuration=None,
+                base_executable=executable,
+                process_image=executable,
+                runtime_image=executable,
+            ),
+        )
+    monkeypatch.setattr(sys, "platform", "linux")
+    runtime_images = plan.executable.interpreter.runtime
+    kernel = copy.deepcopy(_runtime_proof(plan.executable))
+    kernel["native"] = {
+        "process_image": runtime_images.process_image.to_dict(),
+        "runtime_image": runtime_images.runtime_image.to_dict(),
+    }
+    observed: list[str] = []
+
+    def observe(platform, probes, _limits, _streams):
+        observed.append(platform)
+        return tuple(
+            probe.name
+            for probe in probes
+            if probe.availability == go_v1.AVAILABILITY_AVAILABLE
+        )
+
+    def run_session(host: str, proof: dict[str, object]):
+        monkeypatch.setattr(go_v1, "inventory_platform", lambda: host)
+        executor = RecordingExecutor()
+        output = io.BytesIO()
+        launch_context = _launch_context()
+        request = go_v1._plan_request_mapping(plan, secret)
+        status = go_v1.run_worker(
+            io.BytesIO(
+                _frame(
+                    {
+                        "kind": "request",
+                        "nonce": nonce,
+                        "manager_auth": go_v1._launch_authenticator(
+                            launch_context.secret,
+                            go_v1._WORKER_LAUNCH_REQUEST_DOMAIN,
+                            nonce,
+                            request,
+                        ),
+                        "request": request,
+                    }
+                )
+                + _frame({"kind": "list", "nonce": nonce})
+                + _frame(
+                    {
+                        "kind": "permit",
+                        "nonce": nonce,
+                        "permit": go_v1._build_permit(
+                            secret, nonce, plan.build_argv
+                        ),
+                    }
+                )
+                + _frame({"kind": "shutdown", "nonce": nonce})
+            ),
+            output,
+            executor=executor,
+            worker_executable=plan.executable.path,
+            identity_resolver=lambda _path: plan.executable,
+            control_observer=observe,
+            runtime_proof=proof,
+            _launch_context=launch_context,
+        )
+        frames: list[dict[str, Any]] = []
+        stream = io.BytesIO(output.getvalue())
+        while stream.tell() != len(output.getvalue()):
+            frames.append(dict(go_v1._read_message(stream)))
+        return status, frames, executor.calls
+
+    status, frames, calls = run_session(
+        go_v1.PLATFORM_MACOS, _runtime_proof(plan.executable)
+    )
+    assert status == 0
+    assert [frame["kind"] for frame in frames] == [
+        "ready",
+        "list-result",
+        "build-result",
+    ]
+    assert observed == [go_v1.PLATFORM_MACOS]
+    assert len(calls) == 2
+    status, frames, calls = run_session(
+        go_v1.PLATFORM_LINUX, _runtime_proof(plan.executable)
+    )
+    assert status == 3
+    assert [frame["kind"] for frame in frames] == ["failure"]
+    assert frames[0]["failure"]["code"] == go_v1.CODE_WORKER_IDENTITY_INVALID
+    assert (
+        "does not carry kernel image identities"
+        in frames[0]["failure"]["detail"]
+    )
+    assert calls == []
+    assert observed == [go_v1.PLATFORM_MACOS]
+    status, frames, calls = run_session(go_v1.PLATFORM_LINUX, kernel)
+    assert status == 3
+    assert [frame["kind"] for frame in frames] == ["failure"]
+    assert (
+        frames[0]["failure"]["code"]
+        == go_v1.CODE_CAPABILITY_EVIDENCE_INVALID
+    )
+    assert (
+        "worker request platform is not this host"
+        in frames[0]["failure"]["detail"]
+    )
+    assert calls == []
+    assert observed == [go_v1.PLATFORM_MACOS]
+    # Positive control still reaches ready after every refusal.
+    status, frames, calls = run_session(
+        go_v1.PLATFORM_MACOS, _runtime_proof(plan.executable)
+    )
+    assert status == 0
+    assert [frame["kind"] for frame in frames] == [
+        "ready",
+        "list-result",
+        "build-result",
+    ]
+    assert observed == [go_v1.PLATFORM_MACOS, go_v1.PLATFORM_MACOS]
+    assert len(calls) == 2
+
+
+# A bound Windows launcher zip member validates under the Windows
+# session selection on any host, with the plain proof as its control.
 def test_worker_runtime_proof_accepts_bound_windows_launcher_zip_member(
     tmp_path: Path,
 ):
     plan, _, _ = _worker_fixture(tmp_path)
     identity = plan.executable
     proof = copy.deepcopy(_runtime_proof(identity))
+    go_v1.validate_worker_runtime(proof, identity, _platform=go_v1.PLATFORM_WINDOWS)
     cast(list[str], proof["path"]).append(str(identity.launcher.path))
     cast(list[dict[str, str]], proof["modules"]).append(
         {
@@ -1698,7 +1927,7 @@ def test_worker_runtime_proof_accepts_bound_windows_launcher_zip_member(
         }
     )
 
-    go_v1.validate_worker_runtime(proof, identity)
+    go_v1.validate_worker_runtime(proof, identity, _platform=go_v1.PLATFORM_WINDOWS)
 
 
 def test_worker_rejects_a_site_enabled_startup_before_any_go_process(

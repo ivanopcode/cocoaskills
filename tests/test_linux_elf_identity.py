@@ -637,12 +637,30 @@ def test_profile_refuses_unsupported(layout, tmp_path, plant):
 _MAPS_ADDR = 0x400100
 
 
+def _device_parts(device):
+    # Hosts without os.major/os.minor (Windows) split the device with
+    # the Linux encoding the parser rebuilds, so the round trip holds.
+    if hasattr(os, 'major'):
+        return os.major(device), os.minor(device)
+    major = ((device >> 8) & 0xFFF) | ((device >> 32) & 0xFFFFF000)
+    minor = (device & 0xFF) | ((device >> 12) & 0xFFFFFF00)
+    return major, minor
+
+
+def _maps_pathname(path):
+    # Real maps pathnames are absolute POSIX paths on every host.
+    text = path.as_posix()
+    return text if text.startswith('/') else '/' + text
+
+
 def _maps_line(path, *, start=0x400000, end=0x401000, inode=None, suffix=''):
     info = os.stat(path)
+    major, minor = _device_parts(info.st_dev)
     return (
         f'{start:x}-{end:x} r-xp 00000000 '
-        f'{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x} '
-        f'{info.st_ino if inode is None else inode} {path}{suffix}\n'
+        f'{major:02x}:{minor:02x} '
+        f'{info.st_ino if inode is None else inode} '
+        f'{_maps_pathname(path)}{suffix}\n'
     )
 
 
@@ -652,17 +670,17 @@ def _prove(retained, **kwargs):
     return linux.prove_loaded_identities(retained, **kwargs)
 
 
-# Maps parsing is a pure function: exact fields parse, while malformed,
-# empty, over-line-bound and over-byte-bound maps text refuse by name;
-# the same holds through the bounded _proc_maps file reader, next to
-# its accepted file control.
+# Maps parsing is a pure function on every host: exact fields parse,
+# while malformed, empty, over-line-bound and over-byte-bound maps
+# text refuse by name; the same holds through the bounded _proc_maps
+# file reader, next to its accepted file control.
 def test_parse_proc_maps(tmp_path):
     target = write(tmp_path / 'python3.14', image())
     entries = go_v1._parse_proc_maps(_maps_line(target))
     info = os.stat(target)
     assert entries[0].device == info.st_dev
     assert entries[0].inode == info.st_ino
-    assert entries[0].pathname == str(target)
+    assert entries[0].pathname == _maps_pathname(target)
     # One otherwise valid line that is over the 1 MiB byte bound: only
     # the byte bound can refuse it (line count and syntax are fine).
     over_bytes = (
@@ -691,7 +709,8 @@ def test_parse_proc_maps(tmp_path):
                 _version_info=(3, 14))
     loaded = go_v1._linux_loaded_identities(
         _proc_maps=maps_file, **seam)
-    assert loaded[0].path == target
+    assert loaded[0].path == type(proc_exe)(os.readlink(proc_exe))
+    assert os.path.samefile(loaded[0].path, target)
     assert (loaded[0].device, loaded[0].inode) == (info.st_dev, info.st_ino)
     assert loaded[1] == loaded[0]
     with pytest.raises(go_v1.GoV1Error, match='procfs is missing'):
@@ -789,14 +808,17 @@ def test_prove_loaded_identities_shared(layout, tmp_path):
         retained.runtime.identity)
 
 
-# The Linux session helpers derive loaded images from procfs and maps;
-# missing procfs, a deleted process mapping, a deleted runtime mapping
-# and a wrong worker Python version each refuse by name.
+# The Linux session helpers derive loaded images from procfs and maps
+# (exact reported target text, the same file as the written image);
+# missing procfs, a deleted process mapping, a deleted runtime
+# mapping and a wrong worker Python version each refuse by name.
 def test_linux_loaded_image_helpers(tmp_path):
     image_path = write(tmp_path / 'python3.14', image())
     proc_exe = tmp_path / 'proc-exe'
     proc_exe.symlink_to(image_path)
-    assert go_v1._linux_loaded_process_image(_proc_exe=proc_exe) == image_path
+    reported = type(proc_exe)(os.readlink(proc_exe))
+    assert go_v1._linux_loaded_process_image(_proc_exe=proc_exe) == reported
+    assert os.path.samefile(reported, image_path)
     with pytest.raises(go_v1.GoV1Error, match='procfs is missing'):
         go_v1._linux_loaded_process_image(_proc_exe=tmp_path / 'missing')
     deleted = tmp_path / 'deleted-proc'
@@ -806,7 +828,7 @@ def test_linux_loaded_image_helpers(tmp_path):
         go_v1._linux_loaded_process_image(_proc_exe=deleted)
     seam = dict(_proc_exe=proc_exe, _address=_MAPS_ADDR, _version_info=(3, 14))
     assert go_v1._linux_loaded_python_runtime_image(
-        _maps_text=_maps_line(image_path), **seam) == image_path
+        _maps_text=_maps_line(image_path), **seam) == reported
     with pytest.raises(go_v1.GoV1Error, match='deleted mapping owns'):
         go_v1._linux_loaded_python_runtime_image(
             _maps_text=_maps_line(image_path, suffix=' (deleted)'), **seam)
@@ -816,13 +838,13 @@ def test_linux_loaded_image_helpers(tmp_path):
             **{**seam, '_version_info': (3, 13)})
     # Positive control still passes after every refusal plant.
     assert go_v1._linux_loaded_python_runtime_image(
-        _maps_text=_maps_line(image_path), **seam) == image_path
+        _maps_text=_maps_line(image_path), **seam) == reported
 
 
 # The process identity hashes the file opened through procfs, not the
 # file named by the readlink target: a divergent reported target keeps
 # the opened file's hash, (dev, ino) and size, next to the default
-# readlink positive control on the same proc_exe.
+# readlink positive control (exact target text, the same opened file).
 def test_linux_process_identity_hashes_opened_file(tmp_path):
     opened = write(tmp_path / 'opened-python', image())
     reported = write(
@@ -832,7 +854,8 @@ def test_linux_process_identity_hashes_opened_file(tmp_path):
     proc_exe.symlink_to(opened)
     opened_info = os.stat(opened)
     control = go_v1._linux_process_identity(proc_exe)
-    assert control.path == opened
+    assert control.path == type(proc_exe)(os.readlink(proc_exe))
+    assert os.path.samefile(control.path, opened)
     assert (control.device, control.inode) == (
         opened_info.st_dev, opened_info.st_ino)
     divergent = go_v1._linux_process_identity(

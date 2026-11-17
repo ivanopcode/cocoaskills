@@ -5111,6 +5111,7 @@ class _WorkerSession:
             self._runtime_proof,
             actual_identity,
             expected_launch_context=self._launch_context,
+            _platform=inventory_platform(),
         )
         self._validate_plan(plan)
         applied = self._control_observer(
@@ -6796,12 +6797,27 @@ _MAX_PROC_MAPS_BYTES: Final = 1024 * 1024
 _MAX_PROC_MAPS_LINES: Final = 4096
 
 
+def _proc_maps_device(major: int, minor: int) -> int:
+    # Hosts without os.makedev (Windows) still parse Linux maps text in
+    # tests; rebuild the number with the Linux (glibc) encoding there.
+    # POSIX hosts keep os.makedev so the result compares against stat.
+    makedev = getattr(os, "makedev", None)
+    if makedev is not None:
+        return int(makedev(major, minor))
+    return (
+        ((major & 0xFFFFF000) << 32)
+        | ((major & 0xFFF) << 8)
+        | ((minor & ~0xFF) << 12)
+        | (minor & 0xFF)
+    )
+
+
 def _parse_proc_maps(text: str) -> tuple[_ProcMapEntry, ...]:
     """Parse ``/proc/self/maps`` text; any malformed line refuses.
 
     Pure function of the maps text so fixtures can prove selection and
-    refusal without a Linux process. Device numbers are rebuilt with
-    ``os.makedev`` so they compare directly against ``stat`` results.
+    refusal without a Linux process. Device numbers are rebuilt from
+    major and minor so they compare directly against ``stat`` results.
     """
     if len(text.encode("utf-8", "surrogateescape")) > _MAX_PROC_MAPS_BYTES:
         raise GoV1Error(
@@ -6827,7 +6843,7 @@ def _parse_proc_maps(text: str) -> tuple[_ProcMapEntry, ...]:
             start, end = int(start_text, 16), int(end_text, 16)
             offset = int(fields[2], 16)
             major_text, minor_text = fields[3].split(":", 1)
-            device = os.makedev(int(major_text, 16), int(minor_text, 16))
+            device = _proc_maps_device(int(major_text, 16), int(minor_text, 16))
             inode = int(fields[4], 10)
         except ValueError as exc:
             raise GoV1Error(
@@ -7249,6 +7265,10 @@ def validate_worker_runtime(
         {"process_image", "runtime_image"},
         "worker native runtime proof",
     )
+    # The selected platform decides the proof shape: Linux must carry
+    # kernel identities, other platforms carry paths. Production
+    # selects the host platform; without a selection the host decides,
+    # so a path-only proof still refuses on Linux.
     linux_proof = (
         _platform == PLATFORM_LINUX
         if _platform is not None
