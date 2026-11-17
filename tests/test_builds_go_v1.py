@@ -38,6 +38,7 @@ def _synthetic_manager_runtime_on_unsupported_hosts(
 
     def resolve(
         executable: go_v1._ExecutableIdentity,
+        **seams: object,
     ) -> go_v1._InterpreterRuntimeIdentity:
         return go_v1._InterpreterRuntimeIdentity(
             python_home=executable.path.parent.parent,
@@ -45,6 +46,7 @@ def _synthetic_manager_runtime_on_unsupported_hosts(
             base_executable=executable,
             process_image=executable,
             runtime_image=executable,
+            platform=go_v1.PLATFORM_MACOS,
         )
 
     monkeypatch.setattr(go_v1, "_resolve_interpreter_runtime", resolve)
@@ -1727,12 +1729,13 @@ def test_scripted_worker_on_linux_host_uses_session_platform(
         monkeypatch.setattr(
             go_v1,
             "_resolve_interpreter_runtime",
-            lambda executable: go_v1._InterpreterRuntimeIdentity(
+            lambda executable, **_seams: go_v1._InterpreterRuntimeIdentity(
                 python_home=executable.path.parent.parent,
                 configuration=None,
                 base_executable=executable,
                 process_image=executable,
                 runtime_image=executable,
+                platform=go_v1.PLATFORM_MACOS,
             ),
         )
     monkeypatch.setattr(sys, "platform", "linux")
@@ -1788,12 +1791,13 @@ def test_scripted_worker_refuses_plan_for_another_host(
         monkeypatch.setattr(
             go_v1,
             "_resolve_interpreter_runtime",
-            lambda executable: go_v1._InterpreterRuntimeIdentity(
+            lambda executable, **_seams: go_v1._InterpreterRuntimeIdentity(
                 python_home=executable.path.parent.parent,
                 configuration=None,
                 base_executable=executable,
                 process_image=executable,
                 runtime_image=executable,
+                platform=go_v1.PLATFORM_MACOS,
             ),
         )
     monkeypatch.setattr(sys, "platform", "linux")
@@ -1908,6 +1912,280 @@ def test_scripted_worker_refuses_plan_for_another_host(
     ]
     assert observed == [go_v1.PLATFORM_MACOS, go_v1.PLATFORM_MACOS]
     assert len(calls) == 2
+
+
+def _fake_executable_identity(path: Path, inode: int) -> go_v1._ExecutableIdentity:
+    return go_v1._ExecutableIdentity(
+        path=path,
+        sha256="sha256:" + "a" * 64,
+        size=1,
+        device=1,
+        inode=inode,
+        mode=0o755,
+    )
+
+
+# Runtime platform dispatch follows the stored explicit platform even when the runtime image suffix names another platform.
+def test_runtime_platform_is_explicit_not_suffix_inferred(tmp_path: Path):
+    home = tmp_path / "home"
+    (home / "Lib").mkdir(parents=True)
+    stdlib = home / "lib" / "python3.14"
+    site_root = stdlib / "site-packages"
+    site_root.mkdir(parents=True)
+    base = _fake_executable_identity(home / "bin" / "python", 1)
+
+    def interpreter_for(
+        platform: str, runtime_name: str
+    ) -> go_v1._InterpreterIdentity:
+        runtime = go_v1._InterpreterRuntimeIdentity(
+            python_home=home,
+            configuration=None,
+            base_executable=base,
+            process_image=base,
+            runtime_image=_fake_executable_identity(home / runtime_name, 2),
+            platform=platform,
+        )
+        return go_v1._InterpreterIdentity(
+            invocation_path=home / "bin" / "python",
+            links=(),
+            executable=base,
+            runtime=runtime,
+        )
+
+    windows = interpreter_for(go_v1.PLATFORM_WINDOWS, "libpython3.14.so.1.0")
+    assert go_v1._interpreter_runtime_platform(
+        windows.runtime
+    ) == go_v1.PLATFORM_WINDOWS
+    assert go_v1._manager_stdlib_root(windows, site_root) == home / "Lib"
+    assert go_v1._manager_runtime_roots(home / "Lib", windows) == (home,)
+
+    linux = interpreter_for(go_v1.PLATFORM_LINUX, "python314.dll")
+    assert go_v1._interpreter_runtime_platform(
+        linux.runtime
+    ) == go_v1.PLATFORM_LINUX
+    assert go_v1._manager_stdlib_root(linux, site_root) == stdlib
+    assert go_v1._manager_runtime_roots(stdlib, linux) == (stdlib,)
+    assert go_v1._runtime_archive_slots(stdlib, linux) == (
+        home / "lib" / "python314.zip",
+    )
+
+    macos = interpreter_for(go_v1.PLATFORM_MACOS, "libpython3.14.so.1.0")
+    assert go_v1._interpreter_runtime_platform(
+        macos.runtime
+    ) == go_v1.PLATFORM_MACOS
+    assert go_v1._manager_stdlib_root(macos, site_root) == stdlib
+    assert go_v1._manager_runtime_roots(stdlib, macos) == (stdlib,)
+
+    assert go_v1._interpreter_identity_from_mapping(linux.to_dict()) == linux
+    tampered = copy.deepcopy(linux.to_dict())
+    cast(dict[str, object], tampered["runtime"])["platform"] = "plan9"
+    with pytest.raises(
+        go_v1.GoV1Error,
+        match="manager interpreter runtime identity carries an unknown platform",
+    ) as raised:
+        go_v1._interpreter_identity_from_mapping(tampered)
+    assert raised.value.code == go_v1.CODE_WORKER_PROTOCOL_INVALID
+    assert go_v1._interpreter_identity_from_mapping(linux.to_dict()) == linux
+
+
+# Explicit macOS/Windows selection dispatches to exactly one runtime resolver; Linux and unknown platforms refuse at runtime dispatch and no seam keeps host dispatch.
+def test_interpreter_runtime_dispatch_selects_explicit_platform(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    executable = _fake_executable_identity(tmp_path / "python", 1)
+    calls: list[str] = []
+
+    def sentinel(name: str, platform: str):
+        def resolve(*_args: object, **_kwargs: object):
+            calls.append(name)
+            return go_v1._InterpreterRuntimeIdentity(
+                python_home=tmp_path,
+                configuration=None,
+                base_executable=executable,
+                process_image=executable,
+                runtime_image=executable,
+                platform=platform,
+            )
+
+        return resolve
+
+    monkeypatch.setattr(
+        go_v1,
+        "_resolve_windows_interpreter_runtime",
+        sentinel("windows", go_v1.PLATFORM_WINDOWS),
+    )
+    monkeypatch.setattr(
+        go_v1,
+        "_resolve_macos_interpreter_runtime",
+        sentinel("macos", go_v1.PLATFORM_MACOS),
+    )
+    resolve = _NATIVE_INTERPRETER_RUNTIME_RESOLVER
+    assert resolve(executable, _platform=go_v1.PLATFORM_WINDOWS).platform == (
+        go_v1.PLATFORM_WINDOWS
+    )
+    assert resolve(executable, _platform=go_v1.PLATFORM_MACOS).platform == (
+        go_v1.PLATFORM_MACOS
+    )
+    assert calls == ["windows", "macos"]
+    with pytest.raises(
+        go_v1.GoV1Error,
+        match="manager interpreter identity is unsupported on this host",
+    ) as linux_raised:
+        resolve(executable, _platform=go_v1.PLATFORM_LINUX)
+    assert linux_raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert calls == ["windows", "macos"]
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        resolve(executable, _platform="plan9")
+    assert raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert calls == ["windows", "macos"]
+    if os.name == "nt":
+        assert resolve(executable).platform == go_v1.PLATFORM_WINDOWS
+    elif sys.platform == "darwin":
+        assert resolve(executable).platform == go_v1.PLATFORM_MACOS
+    else:
+        with pytest.raises(go_v1.GoV1Error) as host_raised:
+            resolve(executable)
+        assert host_raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+
+
+# The worker launch vector follows the stored platform: only Windows executes the base interpreter directly.
+def test_worker_argv_follows_explicit_runtime_platform(tmp_path: Path):
+    plan, _, _ = _worker_fixture(tmp_path)
+    identity = plan.executable
+    assert go_v1.worker_argv(identity)[0] == str(
+        identity.interpreter.invocation_path
+    )
+    base_executable = replace(
+        identity.interpreter.runtime.base_executable,
+        path=tmp_path / "base-python" / "python.exe",
+    )
+    windows = replace(
+        identity,
+        interpreter=replace(
+            identity.interpreter,
+            runtime=replace(
+                identity.interpreter.runtime,
+                base_executable=base_executable,
+                platform=go_v1.PLATFORM_WINDOWS,
+            ),
+        ),
+    )
+    assert go_v1.worker_argv(windows)[0] == str(base_executable.path)
+    assert str(base_executable.path) != str(
+        identity.interpreter.invocation_path
+    )
+    linux = replace(
+        identity,
+        interpreter=replace(
+            identity.interpreter,
+            runtime=replace(
+                identity.interpreter.runtime,
+                platform=go_v1.PLATFORM_LINUX,
+            ),
+        ),
+    )
+    assert go_v1.worker_argv(linux)[0] == str(
+        identity.interpreter.invocation_path
+    )
+
+
+# Explicit proof platform selection reaches each native branch without consulting the closed public inventory.
+def test_worker_native_runtime_proof_explicit_platform_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    process_image = tmp_path / "process"
+    runtime_image = tmp_path / "runtime"
+    monkeypatch.setattr(
+        go_v1, "_macos_loaded_process_image", lambda: process_image
+    )
+    monkeypatch.setattr(
+        go_v1, "_macos_loaded_python_runtime_image", lambda: runtime_image
+    )
+    monkeypatch.setattr(
+        go_v1,
+        "_windows_loaded_image",
+        lambda handle, _label: runtime_image if handle else process_image,
+    )
+    linux_process = _fake_executable_identity(process_image, 11)
+    linux_runtime = _fake_executable_identity(runtime_image, 12)
+    monkeypatch.setattr(
+        go_v1,
+        "_linux_loaded_identities",
+        lambda: (linux_process, linux_runtime),
+    )
+
+    def closed_inventory() -> str:
+        raise go_v1.GoV1Error(
+            go_v1.CODE_CONTROL_UNAVAILABLE,
+            "rc5-native-control-inventory-v1 covers exactly macOS and Windows",
+        )
+
+    monkeypatch.setattr(go_v1, "inventory_platform", closed_inventory)
+    assert go_v1._worker_native_runtime_proof(
+        _platform=go_v1.PLATFORM_MACOS
+    ) == {
+        "process_image": str(process_image),
+        "runtime_image": str(runtime_image),
+    }
+    assert go_v1._worker_native_runtime_proof(
+        _platform=go_v1.PLATFORM_WINDOWS
+    ) == {
+        "process_image": str(process_image),
+        "runtime_image": str(runtime_image),
+    }
+    assert go_v1._worker_native_runtime_proof(
+        _platform=go_v1.PLATFORM_LINUX
+    ) == {
+        "process_image": linux_process.to_dict(),
+        "runtime_image": linux_runtime.to_dict(),
+    }
+    with pytest.raises(go_v1.GoV1Error) as raised:
+        go_v1._worker_native_runtime_proof()
+    assert raised.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    with pytest.raises(go_v1.GoV1Error) as unknown:
+        go_v1._worker_native_runtime_proof(_platform="plan9")
+    assert unknown.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+
+
+# Reachability pin: explicit Linux proof selection returns the monkeypatched loaded identities and session validation accepts them, refusing the same proof tampered.
+def test_worker_runtime_proof_linux_accepts_produced_kernel_proof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    plan, _, _ = _worker_fixture(tmp_path)
+    identity = replace(
+        plan.executable,
+        interpreter=replace(
+            plan.executable.interpreter,
+            runtime=replace(
+                plan.executable.interpreter.runtime,
+                platform=go_v1.PLATFORM_LINUX,
+            ),
+        ),
+    )
+    runtime = identity.interpreter.runtime
+    monkeypatch.setattr(
+        go_v1,
+        "_linux_loaded_identities",
+        lambda: (runtime.process_image, runtime.runtime_image),
+    )
+    proof = copy.deepcopy(_runtime_proof(identity))
+    proof["native"] = go_v1._worker_native_runtime_proof(
+        _platform=go_v1.PLATFORM_LINUX
+    )
+    go_v1.validate_worker_runtime(proof, identity, _platform="linux")
+    tampered = copy.deepcopy(proof)
+    cast(dict[str, dict[str, object]], tampered["native"])[
+        "runtime_image"
+    ]["inode"] = runtime.runtime_image.inode + 1
+    with pytest.raises(
+        go_v1.GoV1Error, match="outside the bound identity"
+    ) as raised:
+        go_v1.validate_worker_runtime(tampered, identity, _platform="linux")
+    assert raised.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    go_v1.validate_worker_runtime(proof, identity, _platform="linux")
 
 
 # A bound Windows launcher zip member validates under the Windows

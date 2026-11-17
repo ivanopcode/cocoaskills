@@ -15,6 +15,7 @@ import struct
 
 from ._elf_identity import MAX_IMAGE, parse_elf, refuse
 from .go_v1 import (
+    PLATFORM_LINUX,
     _ExecutableIdentity,
     _InterpreterIdentity,
     _InterpreterLinkIdentity,
@@ -421,6 +422,7 @@ def resolve_linux_interpreter_identity(
         base_executable=executable,
         process_image=linux.process.identity,
         runtime_image=linux.runtime.identity,
+        platform=PLATFORM_LINUX,
     )
     interpreter = _InterpreterIdentity(
         invocation_path=linux.process.invocation,

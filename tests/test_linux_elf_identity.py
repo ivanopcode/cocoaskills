@@ -970,3 +970,368 @@ def test_real_linux_default_proof_and_relative_argv0():
     child = tuple(int(value) for value in result.stdout.split())
     assert child == (loaded[0].device, loaded[0].inode,
                      loaded[1].device, loaded[1].inode)
+
+
+def _manager_linux_layout(executable, tmp_path):
+    # One fake root is both the distribution root and the installed
+    # manager prefix: bin/python3.14 (the layout fixture ELF), a bin/csk
+    # launcher naming it, and the lib/python3.14 package/stdlib trees.
+    from pathlib import Path as _Path
+    target = _Path(os.path.realpath(executable))
+    root = target.parents[1]
+    package = root / 'lib/python3.14/site-packages/csk'
+    (package / 'builds').mkdir(parents=True, exist_ok=True)
+    for relative in ('__init__.py', 'cli.py', 'builds/go_v1.py'):
+        package.joinpath(*relative.split('/')).write_text(
+            f'# synthetic {relative}\n', encoding='utf-8')
+    stdlib_json = root / 'lib/python3.14/json/__init__.py'
+    stdlib_json.parent.mkdir(parents=True, exist_ok=True)
+    stdlib_json.write_text('# synthetic json\n', encoding='utf-8')
+    launcher = root / 'bin/csk'
+    launcher.write_text(
+        f'#!{target}\nfrom csk.cli import main\nmain()\n',
+        encoding='utf-8')
+    launcher.chmod(0o755)
+    seams = dict(
+        _platform=go_v1.PLATFORM_LINUX,
+        _linux_host_machine='x86_64',
+        _linux_cache_path=tmp_path / 'cache',
+        _linux_preload_path=tmp_path / 'preload',
+        _linux_distribution_root=root,
+        _linux_distribution_owner=target.stat().st_uid,
+    )
+    return launcher.resolve(), seams, root, target
+
+
+# The manager and worker resolvers connect the Linux profile identity to the shared manager identity under explicit seams.
+def test_manager_identity_resolves_linux_profile_layout(layout, tmp_path):
+    executable, _ = layout
+    launcher, seams, root, target = _manager_linux_layout(executable, tmp_path)
+    identity = go_v1._resolve_manager_identity(launcher, **seams)
+    runtime = identity.interpreter.runtime
+    assert go_v1._interpreter_runtime_platform(runtime) == go_v1.PLATFORM_LINUX
+    assert runtime.python_home == root
+    assert runtime.base_executable.path == target
+    assert runtime.process_image.path == target
+    assert runtime.runtime_image.path == target
+    assert identity.startup.stdlib_root == root / 'lib/python3.14'
+    assert go_v1._manager_runtime_roots(
+        identity.startup.stdlib_root, identity.interpreter) == (
+            root / 'lib/python3.14',)
+    assert go_v1.worker_argv(identity)[0] == str(
+        identity.interpreter.invocation_path)
+    assert go_v1._manager_identity_from_mapping(identity.to_dict()) == identity
+    worker = go_v1._resolve_worker_manager_identity(
+        launcher, **seams,
+        _loaded_package_root=root / 'lib/python3.14/site-packages/csk',
+        _running_interpreter=target)
+    assert worker == identity
+    retained = _profile(executable, tmp_path)
+    assert runtime.process_image == retained.interpreter.runtime.process_image
+    assert runtime.runtime_image == retained.interpreter.runtime.runtime_image
+    proc_exe = tmp_path / 'proc-exe'
+    proc_exe.symlink_to(executable)
+    loaded = _prove(retained.linux, proc_exe=proc_exe,
+                    maps_text=_maps_line(executable))
+    assert loaded == (runtime.process_image, runtime.runtime_image)
+
+
+def _manager_linux_venv_layout(executable, tmp_path):
+    # Package venv beside the distribution root: venv/bin/python links
+    # through venv/bin/python3.14 to the distribution executable, the
+    # launcher names venv/bin/python, and the package lives in the venv.
+    from pathlib import Path as _Path
+    _launcher, seams, root, target = _manager_linux_layout(
+        executable, tmp_path)
+    base = _Path(os.path.realpath(tmp_path))
+    venv = base / 'venv'
+    venv_bin = venv / 'bin'
+    venv_bin.mkdir(parents=True)
+    (venv_bin / 'python3.14').symlink_to(target)
+    invocation = venv_bin / 'python'
+    invocation.symlink_to('python3.14')
+    config = venv / 'pyvenv.cfg'
+    config.write_text(f'home = {target.parent}\n', encoding='utf-8')
+    package = venv / 'lib/python3.14/site-packages/csk'
+    (package / 'builds').mkdir(parents=True)
+    for relative in ('__init__.py', 'cli.py', 'builds/go_v1.py'):
+        package.joinpath(*relative.split('/')).write_text(
+            f'# synthetic {relative}\n', encoding='utf-8')
+    launcher = venv_bin / 'csk'
+    launcher.write_text(
+        f'#!{invocation}\nfrom csk.cli import main\nmain()\n',
+        encoding='utf-8')
+    launcher.chmod(0o755)
+    return launcher, seams, root, target, venv, invocation, config
+
+
+# A package-venv manager invocation binds its pyvenv.cfg through the identity path while the stdlib stays in the distribution prefix.
+def test_manager_identity_resolves_linux_package_venv_layout(layout, tmp_path):
+    executable, _ = layout
+    launcher, seams, root, target, venv, invocation, config = (
+        _manager_linux_venv_layout(executable, tmp_path))
+    identity = go_v1._resolve_manager_identity(launcher, **seams)
+    runtime = identity.interpreter.runtime
+    assert runtime.configuration is not None
+    assert runtime.configuration.path == config
+    assert config in identity.watch_paths()
+    assert identity.interpreter.invocation_path == invocation
+    assert identity.interpreter.links
+    assert runtime.python_home == root
+    assert identity.startup.site_root == (
+        venv / 'lib/python3.14/site-packages')
+    assert identity.startup.stdlib_root == root / 'lib/python3.14'
+    assert go_v1._manager_identity_from_mapping(identity.to_dict()) == identity
+    worker = go_v1._resolve_worker_manager_identity(
+        launcher, **seams,
+        _loaded_package_root=venv / 'lib/python3.14/site-packages/csk',
+        _running_interpreter=invocation)
+    assert worker == identity
+    retained = _profile(invocation, tmp_path)
+    assert retained.interpreter.runtime.configuration is not None
+    assert retained.interpreter.runtime.configuration.path == config
+    proc_exe = tmp_path / 'proc-exe'
+    proc_exe.symlink_to(executable)
+    loaded = _prove(retained.linux, proc_exe=proc_exe,
+                    maps_text=_maps_line(executable))
+    assert loaded == (runtime.process_image, runtime.runtime_image)
+    elsewhere = tmp_path / 'elsewhere-venv'
+    elsewhere.mkdir()
+    config.write_text(f'home = {elsewhere}\n', encoding='utf-8')
+    with pytest.raises(go_v1.GoV1Error, match='does not name the base') as error:
+        go_v1._resolve_manager_identity(launcher, **seams)
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    config.write_text(f'home = {target.parent}\n', encoding='utf-8')
+    assert go_v1._resolve_manager_identity(launcher, **seams) == identity
+
+
+# Neighbouring non-distribution and $ORIGIN layouts, a 3.13-layout interpreter and a requested version other than 3.14 refuse through the manager resolver with the Linux ELF resolver texts.
+@pytest.mark.parametrize('plant', ['nondistribution', 'origin', 'embedded313', 'version'])
+def test_manager_identity_refuses_neighbouring_linux_layouts(
+        layout, tmp_path, plant):
+    executable, _ = layout
+    launcher, seams, root, _target = _manager_linux_layout(
+        executable, tmp_path)
+    assert go_v1._resolve_manager_identity(launcher, **seams)
+    if plant == 'nondistribution':
+        elsewhere = tmp_path / 'elsewhere'
+        elsewhere.mkdir()
+        with pytest.raises(go_v1.GoV1Error, match='non-distribution') as error:
+            go_v1._resolve_manager_identity(
+                launcher, **{**seams, '_linux_distribution_root': elsewhere})
+    elif plant == 'origin':
+        name = 'libpython3.14.so.1.0'
+        write(executable, image(needed=[name], symbol=False,
+                                search='$ORIGIN/../lib'))
+        write(root / 'lib' / name,
+              image(soname=name, interpreter=False, kind=3))
+        with pytest.raises(go_v1.GoV1Error, match='standalone') as error:
+            go_v1._resolve_manager_identity(launcher, **seams)
+        write(executable, image())
+    elif plant == 'embedded313':
+        other = tmp_path / 'opt/python3.13/bin/python3.13'
+        write(other, image())
+        other_launcher = tmp_path / 'csk313'
+        other_launcher.write_text(f'#!{other}\n', encoding='utf-8')
+        other_launcher.chmod(0o755)
+        with pytest.raises(go_v1.GoV1Error, match='non-distribution') as error:
+            go_v1._resolve_manager_identity(other_launcher, **seams)
+    else:
+        with pytest.raises(
+                go_v1.GoV1Error,
+                match='unsupported Python version 3.13') as error:
+            go_v1._resolve_manager_identity(
+                launcher, **{**seams, '_linux_version': '3.13'})
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    # Positive control still resolves after every refusal plant.
+    assert go_v1._resolve_manager_identity(launcher, **seams)
+
+
+# Runtime dispatch refuses Linux even with an explicit seam; the same seams resolve the full identity from the invocation path.
+def test_linux_runtime_refuses_even_with_explicit_platform_seam(
+        layout, tmp_path):
+    executable, _ = layout
+    _launcher, seams, _root, target = _manager_linux_layout(
+        executable, tmp_path)
+    executable_identity = go_v1._resolve_executable_identity(executable)
+    with pytest.raises(
+            go_v1.GoV1Error,
+            match='manager interpreter identity is unsupported on this host') as error:
+        go_v1._resolve_interpreter_runtime(executable_identity, **seams)
+    assert error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    interpreter = go_v1._resolve_interpreter_identity(target, **seams)
+    assert go_v1._interpreter_runtime_platform(
+        interpreter.runtime) == go_v1.PLATFORM_LINUX
+    with pytest.raises(
+            go_v1.GoV1Error,
+            match='manager interpreter identity is unsupported on this host') as again:
+        go_v1._resolve_interpreter_runtime(executable_identity, **seams)
+    assert again.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+
+
+# Without a seam all three identity resolvers refuse on a Linux host before the Linux ELF resolver runs.
+def test_linux_identity_resolvers_stay_closed_without_seam(
+        layout, tmp_path, monkeypatch):
+    executable, _ = layout
+    launcher, seams, _root, target = _manager_linux_layout(
+        executable, tmp_path)
+    original = linux.resolve_linux_interpreter_identity
+    calls = []
+
+    def record(path, **kwargs):
+        calls.append((path, dict(kwargs)))
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(linux, 'resolve_linux_interpreter_identity', record)
+    monkeypatch.setattr(go_v1.sys, 'platform', 'linux')
+    for resolve in (
+            lambda: go_v1._resolve_interpreter_identity(target),
+            lambda: go_v1._resolve_manager_identity(launcher),
+            lambda: go_v1._resolve_worker_manager_identity(launcher)):
+        with pytest.raises(
+                go_v1.GoV1Error,
+                match='manager interpreter identity is unsupported on this host') as error:
+            resolve()
+        assert error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert calls == []
+    assert go_v1._resolve_manager_identity(launcher, **seams)
+    assert calls
+
+
+# Re-resolving a Linux invocation observes replaced bytes instead of reusing the first identity.
+def test_linux_identity_reresolution_observes_replaced_bytes(layout, tmp_path):
+    executable, _ = layout
+    _launcher, seams, _root, target = _manager_linux_layout(
+        executable, tmp_path)
+    first = go_v1._resolve_interpreter_identity(target, **seams)
+    assert go_v1._resolve_interpreter_identity(target, **seams) == first
+    write(executable, image(kind=3))
+    second = go_v1._resolve_interpreter_identity(target, **seams)
+    assert second != first
+    assert second.executable.sha256 != first.executable.sha256
+    write(executable, image())
+    assert go_v1._resolve_interpreter_identity(target, **seams) == first
+
+
+# A seam-resolved Linux identity fails closed under verify, which re-resolves without seams.
+def test_linux_identity_verify_fails_closed(layout, tmp_path, monkeypatch):
+    executable, _ = layout
+    launcher, seams, _root, _target = _manager_linux_layout(
+        executable, tmp_path)
+    identity = go_v1._resolve_manager_identity(launcher, **seams)
+    assert go_v1._resolve_manager_identity(launcher, **seams) == identity
+    with pytest.raises(go_v1.GoV1Error):
+        identity.verify()
+    with pytest.raises(go_v1.GoV1Error):
+        identity.interpreter.verify()
+    monkeypatch.setattr(go_v1.sys, 'platform', 'linux')
+    with pytest.raises(
+            go_v1.GoV1Error,
+            match='manager interpreter identity is unsupported on this host') as interp_error:
+        identity.interpreter.verify()
+    assert interp_error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    with pytest.raises(
+            go_v1.GoV1Error,
+            match='manager interpreter identity is unsupported on this host') as manager_error:
+        identity.verify()
+    assert manager_error.value.code == go_v1.CODE_CONTROL_UNAVAILABLE
+    assert go_v1._resolve_manager_identity(launcher, **seams) == identity
+
+
+# Every provided Linux seam is forwarded to the Linux ELF resolver and every omitted seam stays absent.
+def test_linux_seam_forwarding_reaches_linux_resolver(
+        layout, tmp_path, monkeypatch):
+    executable, _ = layout
+    _launcher, seams, root, target = _manager_linux_layout(
+        executable, tmp_path)
+    expected = go_v1._resolve_interpreter_identity(target, **seams)
+    original = linux.resolve_linux_interpreter_identity
+    calls = []
+
+    class _Resolved:
+        pass
+
+    fake = _Resolved()
+    fake.interpreter = expected
+
+    def record(path, **kwargs):
+        calls.append((path, dict(kwargs)))
+        return fake
+
+    monkeypatch.setattr(linux, 'resolve_linux_interpreter_identity', record)
+    assert go_v1._resolve_interpreter_identity(target, **seams) is expected
+    assert calls[-1][0] == target
+    forwarded = calls[-1][1]
+    assert forwarded['cache_path'] == seams['_linux_cache_path']
+    assert forwarded['preload_path'] == seams['_linux_preload_path']
+    assert forwarded['host_machine'] == 'x86_64'
+    assert forwarded['_distribution_root'] == root
+    assert forwarded['_distribution_owner'] == seams[
+        '_linux_distribution_owner']
+    assert 'version' not in forwarded
+    trimmed = {
+        key: value for key, value in seams.items()
+        if key not in ('_linux_cache_path', '_linux_preload_path')}
+    go_v1._resolve_interpreter_identity(target, **trimmed)
+    assert 'cache_path' not in calls[-1][1]
+    assert 'preload_path' not in calls[-1][1]
+    go_v1._resolve_interpreter_identity(
+        target, **{**trimmed, '_linux_version': '3.13'})
+    assert calls[-1][1]['version'] == '3.13'
+    go_v1._resolve_interpreter_identity(
+        target, _platform=go_v1.PLATFORM_LINUX)
+    assert calls[-1][1] == {}
+    monkeypatch.setattr(linux, 'resolve_linux_interpreter_identity', original)
+    assert go_v1._resolve_interpreter_identity(target, **seams) == expected
+
+
+# Session validation accepts the kernel-identity proof of the Linux-resolved manager identity and refuses a tampered copy.
+def test_validate_worker_runtime_accepts_linux_manager_proof(
+        layout, tmp_path):
+    executable, _ = layout
+    launcher, seams, _root, _target = _manager_linux_layout(
+        executable, tmp_path)
+    identity = go_v1._resolve_manager_identity(launcher, **seams)
+    retained = _profile(executable, tmp_path)
+    proc_exe = tmp_path / 'proc-exe'
+    proc_exe.symlink_to(executable)
+    loaded = _prove(retained.linux, proc_exe=proc_exe,
+                    maps_text=_maps_line(executable))
+    package = identity.package_tree.path
+    proof = {
+        'executable': str(identity.interpreter.invocation_path),
+        'argv0': str(identity.launcher.path),
+        'launch': go_v1._WorkerLaunchContext(
+            parent_pid=os.getpid(),
+            secret=b'l' * go_v1._WORKER_LAUNCH_SECRET_BYTES,
+        ).public_dict(),
+        'flags': {name: 1 for name in go_v1._WORKER_RUNTIME_FLAGS},
+        'native': {
+            'process_image': loaded[0].to_dict(),
+            'runtime_image': loaded[1].to_dict(),
+        },
+        'path': [
+            str(identity.startup.site_root),
+            str(identity.startup.archive_slots[0]),
+            str(identity.startup.stdlib_root),
+        ],
+        'modules': [
+            {'name': 'csk', 'path': str(package / '__init__.py')},
+            {'name': 'csk.cli', 'path': str(package / 'cli.py')},
+            {'name': 'csk.builds.go_v1',
+             'path': str(package / 'builds/go_v1.py')},
+        ],
+    }
+    go_v1.validate_worker_runtime(proof, identity, _platform='linux')
+    tampered = {**proof, 'native': {
+        **proof['native'],
+        'runtime_image': {
+            **proof['native']['runtime_image'],
+            'inode': loaded[1].inode + 1,
+        },
+    }}
+    with pytest.raises(
+            go_v1.GoV1Error, match='outside the bound identity') as error:
+        go_v1.validate_worker_runtime(tampered, identity, _platform='linux')
+    assert error.value.code == go_v1.CODE_WORKER_IDENTITY_INVALID
+    go_v1.validate_worker_runtime(proof, identity, _platform='linux')

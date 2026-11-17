@@ -1638,13 +1638,18 @@ class _InterpreterLinkIdentity:
 
 @dataclass(frozen=True)
 class _InterpreterRuntimeIdentity:
-    """Native images and physical installation data used by one interpreter."""
+    """Native images and physical installation data used by one interpreter.
+
+    ``platform`` is recorded by the resolver that produced this identity;
+    layout consumers never re-derive it from an image name or suffix.
+    """
 
     python_home: Path
     configuration: _ExecutableIdentity | None
     base_executable: _ExecutableIdentity
     process_image: _ExecutableIdentity
     runtime_image: _ExecutableIdentity
+    platform: str
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -1657,6 +1662,7 @@ class _InterpreterRuntimeIdentity:
             "base_executable": self.base_executable.to_dict(),
             "process_image": self.process_image.to_dict(),
             "runtime_image": self.runtime_image.to_dict(),
+            "platform": self.platform,
         }
 
     def watch_paths(self) -> tuple[Path, ...]:
@@ -2824,6 +2830,7 @@ def _resolve_windows_interpreter_runtime(
             candidates[0],
             label="installed manager Python runtime image",
         ),
+        platform=PLATFORM_WINDOWS,
     )
 
 
@@ -2996,6 +3003,7 @@ def _resolve_macos_interpreter_runtime(
                 base_executable=executable,
                 process_image=executable,
                 runtime_image=executable,
+                platform=PLATFORM_MACOS,
             )
         library = python_home / "lib"
         candidates: list[Path] = []
@@ -3052,29 +3060,136 @@ def _resolve_macos_interpreter_runtime(
         base_executable=executable,
         process_image=process_image,
         runtime_image=runtime_image,
+        platform=PLATFORM_MACOS,
     )
+
+
+def _linux_resolver_kwargs(
+    *,
+    _linux_version: str | None,
+    _linux_host_machine: str | None,
+    _linux_cache_path: Path | None,
+    _linux_preload_path: Path | None,
+    _linux_distribution_root: Path | None,
+    _linux_distribution_owner: int | None,
+) -> dict[str, object]:
+    # Only explicitly selected seams are forwarded; every omitted value
+    # keeps the _linux_identity resolver's own production default.
+    result: dict[str, object] = {}
+    if _linux_version is not None:
+        result["version"] = _linux_version
+    if _linux_host_machine is not None:
+        result["host_machine"] = _linux_host_machine
+    if _linux_cache_path is not None:
+        result["cache_path"] = _linux_cache_path
+    if _linux_preload_path is not None:
+        result["preload_path"] = _linux_preload_path
+    if _linux_distribution_root is not None:
+        result["_distribution_root"] = _linux_distribution_root
+    if _linux_distribution_owner is not None:
+        result["_distribution_owner"] = _linux_distribution_owner
+    return result
+
+
+def _resolve_linux_interpreter_identity(
+    path: Path,
+    *,
+    _linux_version: str | None = None,
+    _linux_host_machine: str | None = None,
+    _linux_cache_path: Path | None = None,
+    _linux_preload_path: Path | None = None,
+    _linux_distribution_root: Path | None = None,
+    _linux_distribution_owner: int | None = None,
+) -> _InterpreterIdentity:
+    # Imported at call time: _linux_identity imports this module's
+    # shared identity types, so a top-level import here would be circular.
+    from . import _linux_identity
+
+    resolved = _linux_identity.resolve_linux_interpreter_identity(
+        path,
+        **_linux_resolver_kwargs(  # type: ignore[arg-type]
+            _linux_version=_linux_version,
+            _linux_host_machine=_linux_host_machine,
+            _linux_cache_path=_linux_cache_path,
+            _linux_preload_path=_linux_preload_path,
+            _linux_distribution_root=_linux_distribution_root,
+            _linux_distribution_owner=_linux_distribution_owner,
+        ),
+    )
+    return resolved.interpreter
 
 
 def _resolve_interpreter_runtime(
     executable: _ExecutableIdentity,
+    *,
+    _platform: str | None = None,
+    _linux_version: str | None = None,
+    _linux_host_machine: str | None = None,
+    _linux_cache_path: Path | None = None,
+    _linux_preload_path: Path | None = None,
+    _linux_distribution_root: Path | None = None,
+    _linux_distribution_owner: int | None = None,
 ) -> _InterpreterRuntimeIdentity:
-    if os.name == "nt":
+    # Without an explicit seam the host dispatch is unchanged, so Linux
+    # stays refused on every public path. An explicit seam can select
+    # the macOS or Windows runtime resolver only; Linux refuses here
+    # because only the invocation-path identity resolution binds the
+    # venv configuration, which this final-executable entry cannot see.
+    if _platform is None:
+        if os.name == "nt":
+            return _resolve_windows_interpreter_runtime(executable)
+        if sys.platform == "darwin":
+            return _resolve_macos_interpreter_runtime(executable)
+        raise GoV1Error(
+            CODE_CONTROL_UNAVAILABLE,
+            "manager interpreter identity is unsupported on this host",
+        )
+    if _platform == PLATFORM_WINDOWS:
         return _resolve_windows_interpreter_runtime(executable)
-    if sys.platform == "darwin":
+    if _platform == PLATFORM_MACOS:
         return _resolve_macos_interpreter_runtime(executable)
+    if _platform == PLATFORM_LINUX:
+        raise GoV1Error(
+            CODE_CONTROL_UNAVAILABLE,
+            "manager interpreter identity is unsupported on this host",
+        )
     raise GoV1Error(
         CODE_CONTROL_UNAVAILABLE,
         "manager interpreter identity is unsupported on this host",
     )
 
 
-def _resolve_interpreter_identity(path: Path) -> _InterpreterIdentity:
+def _resolve_interpreter_identity(
+    path: Path,
+    *,
+    _platform: str | None = None,
+    _linux_version: str | None = None,
+    _linux_host_machine: str | None = None,
+    _linux_cache_path: Path | None = None,
+    _linux_preload_path: Path | None = None,
+    _linux_distribution_root: Path | None = None,
+    _linux_distribution_owner: int | None = None,
+) -> _InterpreterIdentity:
     if not path.is_absolute():
         raise GoV1Error(
             CODE_WORKER_IDENTITY_INVALID,
             "manager interpreter path is not absolute",
         )
     invocation_path = Path(os.path.abspath(os.fspath(path)))
+    if _platform == PLATFORM_LINUX:
+        # The Linux ELF resolver owns the whole invocation-to-identity
+        # walk (link capture, loader closure and the venv
+        # configuration), so delegate the complete identity instead of
+        # re-walking here.
+        return _resolve_linux_interpreter_identity(
+            invocation_path,
+            _linux_version=_linux_version,
+            _linux_host_machine=_linux_host_machine,
+            _linux_cache_path=_linux_cache_path,
+            _linux_preload_path=_linux_preload_path,
+            _linux_distribution_root=_linux_distribution_root,
+            _linux_distribution_owner=_linux_distribution_owner,
+        )
     current = invocation_path
     links: list[_InterpreterLinkIdentity] = []
     for _ in range(16):
@@ -3099,7 +3214,10 @@ def _resolve_interpreter_identity(path: Path) -> _InterpreterIdentity:
                 invocation_path=invocation_path,
                 links=tuple(links),
                 executable=executable,
-                runtime=_resolve_interpreter_runtime(executable),
+                runtime=_resolve_interpreter_runtime(
+                    executable,
+                    _platform=_platform,
+                ),
             )
         try:
             target = os.readlink(current)
@@ -3187,9 +3305,23 @@ def _interpreter_identity_from_mapping(
             "base_executable",
             "process_image",
             "runtime_image",
+            "platform",
         },
         "manager interpreter runtime identity",
     )
+    runtime_platform = _require_string(
+        raw_runtime.get("platform"),
+        "manager interpreter runtime platform",
+    )
+    if runtime_platform not in {
+        PLATFORM_MACOS,
+        PLATFORM_WINDOWS,
+        PLATFORM_LINUX,
+    }:
+        raise GoV1Error(
+            CODE_WORKER_PROTOCOL_INVALID,
+            "manager interpreter runtime identity carries an unknown platform",
+        )
     raw_configuration = raw_runtime.get("configuration")
     configuration = (
         None
@@ -3231,6 +3363,7 @@ def _interpreter_identity_from_mapping(
             ),
             "manager interpreter runtime image",
         ),
+        platform=runtime_platform,
     )
     if (
         not runtime.python_home.is_absolute()
@@ -3406,11 +3539,12 @@ def _manager_stdlib_root(
     """
 
     candidates: list[Path] = []
-    if _interpreter_runtime_platform(interpreter.runtime) == PLATFORM_WINDOWS:
+    runtime_platform = _interpreter_runtime_platform(interpreter.runtime)
+    if runtime_platform == PLATFORM_WINDOWS:
         candidates.append(
             _manager_windows_stdlib_root(interpreter.runtime)
         )
-    else:
+    elif runtime_platform in (PLATFORM_MACOS, PLATFORM_LINUX):
         for library_name in ("lib", "lib64"):
             candidates.append(
                 interpreter.runtime.python_home
@@ -3439,18 +3573,15 @@ def _manager_windows_stdlib_root(
 def _interpreter_runtime_platform(
     runtime: _InterpreterRuntimeIdentity,
 ) -> str:
-    if runtime.runtime_image.path.suffix.casefold() == ".dll":
-        return PLATFORM_WINDOWS
-    return PLATFORM_MACOS
+    return runtime.platform
 
 
 def _manager_runtime_roots(
     stdlib_root: Path,
     interpreter: _InterpreterIdentity,
 ) -> tuple[Path, ...]:
-    if _interpreter_runtime_platform(
-        interpreter.runtime
-    ) == PLATFORM_WINDOWS:
+    runtime_platform = _interpreter_runtime_platform(interpreter.runtime)
+    if runtime_platform == PLATFORM_WINDOWS:
         # Windows CPython adds its installation prefix itself to sys.path in
         # addition to Lib, DLLs, and the versioned archive slot.  Bind the
         # complete importable Python home so that accepting that unavoidable
@@ -3458,7 +3589,9 @@ def _manager_runtime_roots(
         # package.  Disabled site-package trees remain excluded by the fixed
         # runtime-tree policy below.
         return (interpreter.runtime.python_home,)
-    return (stdlib_root,)
+    if runtime_platform in (PLATFORM_MACOS, PLATFORM_LINUX):
+        return (stdlib_root,)
+    return ()
 
 
 def _resolve_runtime_archives(
@@ -3894,13 +4027,29 @@ def _resolve_manager_identity(
     *,
     loaded_package_root: Path | None = None,
     running_interpreter: Path | None = None,
+    _platform: str | None = None,
+    _linux_version: str | None = None,
+    _linux_host_machine: str | None = None,
+    _linux_cache_path: Path | None = None,
+    _linux_preload_path: Path | None = None,
+    _linux_distribution_root: Path | None = None,
+    _linux_distribution_owner: int | None = None,
 ) -> _ManagerIdentity:
     launcher_identity = _resolve_executable_identity(
         launcher,
         label="installed manager launcher",
     )
     interpreter_path = _manager_interpreter_path(launcher)
-    interpreter = _resolve_interpreter_identity(interpreter_path)
+    interpreter = _resolve_interpreter_identity(
+        interpreter_path,
+        _platform=_platform,
+        _linux_version=_linux_version,
+        _linux_host_machine=_linux_host_machine,
+        _linux_cache_path=_linux_cache_path,
+        _linux_preload_path=_linux_preload_path,
+        _linux_distribution_root=_linux_distribution_root,
+        _linux_distribution_owner=_linux_distribution_owner,
+    )
     if running_interpreter is not None:
         actual = Path(os.path.abspath(os.fspath(running_interpreter)))
         if (
@@ -3947,11 +4096,38 @@ def _resolve_manager_identity(
     )
 
 
-def _resolve_worker_manager_identity(launcher: Path) -> _ManagerIdentity:
+def _resolve_worker_manager_identity(
+    launcher: Path,
+    *,
+    _platform: str | None = None,
+    _linux_version: str | None = None,
+    _linux_host_machine: str | None = None,
+    _linux_cache_path: Path | None = None,
+    _linux_preload_path: Path | None = None,
+    _linux_distribution_root: Path | None = None,
+    _linux_distribution_owner: int | None = None,
+    _loaded_package_root: Path | None = None,
+    _running_interpreter: Path | None = None,
+) -> _ManagerIdentity:
     return _resolve_manager_identity(
         launcher,
-        loaded_package_root=Path(__file__).resolve(strict=True).parents[1],
-        running_interpreter=Path(sys.executable),
+        loaded_package_root=(
+            Path(__file__).resolve(strict=True).parents[1]
+            if _loaded_package_root is None
+            else _loaded_package_root
+        ),
+        running_interpreter=(
+            Path(sys.executable)
+            if _running_interpreter is None
+            else _running_interpreter
+        ),
+        _platform=_platform,
+        _linux_version=_linux_version,
+        _linux_host_machine=_linux_host_machine,
+        _linux_cache_path=_linux_cache_path,
+        _linux_preload_path=_linux_preload_path,
+        _linux_distribution_root=_linux_distribution_root,
+        _linux_distribution_owner=_linux_distribution_owner,
     )
 
 
@@ -7132,14 +7308,18 @@ def _windows_loaded_image(handle: int, label: str) -> Path:
     )
 
 
-def _worker_native_runtime_proof() -> dict[str, object]:
-    platform = inventory_platform()
+def _worker_native_runtime_proof(
+    *,
+    _platform: str | None = None,
+) -> dict[str, object]:
+    # Without an explicit seam the public inventory decides, so the
+    # Linux branch stays unreachable in production while admission is
+    # closed; tests select the platform explicitly instead.
+    platform = inventory_platform() if _platform is None else _platform
     if platform == PLATFORM_LINUX:
         # Linux sends the full kernel identities (path, device, inode,
         # size, mode, content hash) from /proc/self/maps and
-        # /proc/self/exe, not paths alone. inventory_platform() still
-        # refuses on Linux, so this branch stays unreachable in
-        # production while admission is closed.
+        # /proc/self/exe, not paths alone.
         process_identity, runtime_identity = _linux_loaded_identities()
         return {
             "process_image": process_identity.to_dict(),
@@ -7148,11 +7328,16 @@ def _worker_native_runtime_proof() -> dict[str, object]:
     if platform == PLATFORM_MACOS:
         process_image = _macos_loaded_process_image()
         runtime_image = _macos_loaded_python_runtime_image()
-    else:
+    elif platform == PLATFORM_WINDOWS:
         process_image = _windows_loaded_image(0, "worker process image")
         runtime_image = _windows_loaded_image(
             int(ctypes.pythonapi._handle),
             "worker Python runtime image",
+        )
+    else:
+        raise GoV1Error(
+            CODE_CONTROL_UNAVAILABLE,
+            "rc5-native-control-inventory-v1 covers exactly macOS and Windows",
         )
     return {
         "process_image": os.fspath(process_image),
