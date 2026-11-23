@@ -200,6 +200,51 @@ def _retained_requirers(
     return sorted(stale)
 
 
+def _selective_marker_overrides(
+    csk_home: Path,
+    node: closure.ClosureNode,
+    *,
+    retained: RetainedGlobalSkills,
+    declared_decls: Mapping[str, manifest.SkillDecl] | None,
+    selective: bool,
+) -> tuple[manifest.SkillDecl, list[str]]:
+    """Preserve unselected marker fields on a selective global install/upgrade.
+
+    A selective run (``--only``) resolves only a partial closure, so it must
+    never shrink a provider's live ``requirers`` for retained skills it did
+    not resolve, nor drop ``<project>`` or clobber a direct declaration's
+    ``source``/``git`` spelling while the skill remains directly declared in
+    the global Skillfile.
+    """
+
+    consumers = list(node.consumers())
+    if not selective:
+        return node.decl, consumers
+    marker = _read_installed_marker(
+        global_skills_root(csk_home) / node.name / ".csk-install.json"
+    )
+    if marker is None or not marker.requirers:
+        return node.decl, consumers
+    merged = set(consumers)
+    merged.update(set(marker.requirers) & retained.names)
+    decl = node.decl
+    direct_decl = declared_decls.get(node.name) if declared_decls else None
+    if closure.PROJECT_EDGE in marker.requirers and direct_decl is not None:
+        merged.add(closure.PROJECT_EDGE)
+        if (
+            closure.PROJECT_EDGE not in consumers
+            and not isinstance(marker, install_marker.InstallMarkerV5)
+            and marker.source == direct_decl.source
+            and marker.git == direct_decl.git
+        ):
+            decl = replace(
+                decl,
+                source=direct_decl.source,
+                git=direct_decl.git,
+            )
+    return decl, sorted(merged)
+
+
 def _selection_messages(
     csk_home: Path,
     nodes: list[closure.ClosureNode],
@@ -642,6 +687,10 @@ def _install_once(
                     engine=engine,
                     home_lock=home_lock,
                     retained=retained,
+                    declared_decls={
+                        decl.name: decl for decl in global_manifest.skills
+                    },
+                    selective=bool(only),
                 )
             result.messages.extend(messages)
             result.messages.extend(publication_messages)
@@ -888,6 +937,8 @@ def _commit_global_materialization(
     engine: transactions.TransactionEngine,
     home_lock: locking.ManagerHomeLock,
     retained: RetainedGlobalSkills = RetainedGlobalSkills(),
+    declared_decls: Mapping[str, manifest.SkillDecl] | None = None,
+    selective: bool = False,
 ) -> list[str]:
     csk_home = config.path.parent
     staging_parents = tuple(
@@ -928,6 +979,8 @@ def _commit_global_materialization(
             adapter_targets=adapter_targets,
             user_bin_targets=user_bin_targets,
             retained=retained,
+            declared_decls=declared_decls,
+            selective=selective,
         )
         installer._commit_transaction_targets(
             transaction_prefix="global-install",
@@ -993,6 +1046,8 @@ def _stage_global_materialization(
     adapter_targets: tuple[adapters.AdapterTarget, ...],
     user_bin_targets: tuple[global_bins.UserBinTarget, ...],
     retained: RetainedGlobalSkills = RetainedGlobalSkills(),
+    declared_decls: Mapping[str, manifest.SkillDecl] | None = None,
+    selective: bool = False,
 ) -> tuple[
     dict[tuple[str, str], Path | None],
     list[str],
@@ -1144,14 +1199,26 @@ def _stage_global_materialization(
             "context": node.context_active,
             "commands": sorted(active),
         }
+        marker_decl, requirers = _selective_marker_overrides(
+            csk_home,
+            node,
+            retained=retained,
+            declared_decls=declared_decls,
+            selective=selective,
+        )
+        marker_plan = (
+            plan
+            if marker_decl == plan.decl
+            else replace(plan, decl=marker_decl)
+        )
         if node.context_active:
             installed = installer._install_skill_context_to_root(
                 staged_skills,
-                plan,
+                marker_plan,
                 effective_locale,
                 agents,
                 activation=marker_activation,
-                requirers=node.consumers(),
+                requirers=requirers,
                 substituted=node.substituted,
                 mcp_servers=mcp_found.get(node.name),
                 attestation=registry_attest.get(node.name),
@@ -1161,9 +1228,9 @@ def _stage_global_materialization(
         else:
             installed = installer._install_marker_only(
                 staged_home,
-                plan,
+                marker_plan,
                 activation=marker_activation,
-                requirers=node.consumers(),
+                requirers=requirers,
                 substituted=node.substituted,
                 mcp_servers=mcp_found.get(node.name),
                 target_root=staged_skills,

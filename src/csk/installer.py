@@ -3705,8 +3705,10 @@ def _stage_materialization(
             "context": node.context_active,
             "commands": sorted(active),
         }
-        requirers = node.consumers()
         is_hybrid = node.name in hybrid_store_names
+        # Hybrid-store markers are machine-scoped and shared across projects,
+        # so per-project requirers are omitted rather than alternating per project.
+        requirers = None if is_hybrid else node.consumers()
         if node.context_active and is_hybrid:
             installed = _install_skill_context_to_root(
                 staged_hybrid_store,
@@ -4630,7 +4632,7 @@ def _install_marker_only(
     plan: SkillPlan,
     *,
     activation: dict[str, object],
-    requirers: list[str],
+    requirers: list[str] | None,
     substituted: str | None,
     mcp_servers: dict[str, list[str]] | None = None,
     target_root: Path | None = None,

@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `source` or `git` changes at the same commit. Installer currentness and
   `csk status --check` now share one closure-comparison definition so unchanged
   closures keep their marker byte-identical while changed closure metadata
-  rewrites the marker without rebuilding cached build artifacts.
+  rewrites the marker without rebuilding cached build artifacts. Selective global
+  runs (`--only`) preserve unselected live `requirers`, and shared hybrid-store
+  markers omit per-project `requirers` (migrating existing hybrid markers once
+  without rebuilding).
 
 ## [0.23.0] - 2026-11-13
 

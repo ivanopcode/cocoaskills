@@ -450,9 +450,10 @@ def _collect_resolved_scope(
 
     marker_inspections: dict[str, _MarkerInspection] = {}
     for node in nodes:
+        is_hybrid = node.name in hybrid_store_names
         node_skills_root = (
             csk_home / "hybrid" / "skills"
-            if node.name in hybrid_store_names
+            if is_hybrid
             else skills_root
         )
         marker_inspections[node.name] = _inspect_node_marker(
@@ -461,17 +462,18 @@ def _collect_resolved_scope(
             runtime_dir=csk_home / "runtime" / node.name / node.resolved.commit,
             effective_locale=(
                 config.preferred_locale
-                if node.name in hybrid_store_names and node.context_active
+                if is_hybrid and node.context_active
                 else effective_locale
                 if node.context_active
                 else None
             ),
             agents=(
                 []
-                if node.name in hybrid_store_names or not node.context_active
+                if is_hybrid or not node.context_active
                 else agents
             ),
             expected_build_source=provider_identities.get(node.name),
+            is_hybrid=is_hybrid,
         )
 
     planned: dict[tuple[str, str], build_planner.BuildPlan] = {}
@@ -605,6 +607,7 @@ def _inspect_node_marker(
     effective_locale: str | None,
     agents: list[str],
     expected_build_source: build_source.BuildSourceIdentity | None,
+    is_hybrid: bool = False,
 ) -> _MarkerInspection:
     marker_path = installed_dir / ".csk-install.json"
     try:
@@ -706,7 +709,7 @@ def _inspect_node_marker(
         locale_value=effective_locale,
         agents=agents,
         activation=expected_activation,
-        requirers=node.consumers(),
+        requirers=None if is_hybrid else node.consumers(),
         substituted=node.substituted,
     )
     common_current = (
