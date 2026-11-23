@@ -14,6 +14,8 @@ import threading
 import time
 import unicodedata
 import zlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Callable, Mapping, Sequence
@@ -858,6 +860,16 @@ def _require_transport_credentials(
         )
 
 
+@contextmanager
+def _annotate_repository_failure(identity: str) -> Iterator[None]:
+    try:
+        yield
+    except GitAdmissionError as exc:
+        if exc.repository is None:
+            exc.repository = identity
+        raise
+
+
 def acquire_network(
     source: RepositorySource,
     lock: LockedCommit,
@@ -893,7 +905,10 @@ def acquire_network(
             IDENTITY_INVALID, "network source or exact tag is invalid"
         )
     _preflight_ssh(source, tool)
-    with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
+    with (
+        _annotate_repository_failure(source.identity),
+        tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root,
+    ):
         paths = _make_private_paths(Path(raw_root))
         _remaining_limits(limits, deadline)
         ssh_command = (
@@ -937,7 +952,6 @@ def acquire_network(
             f"--object-format={lock.object_format}",
             "--ref-format=files",
             limits=_remaining_limits(limits, deadline),
-            repository=source.identity,
         )
         _remaining_limits(limits, deadline)
         destination = "refs/csk/tag" if tag is not None else "refs/csk/locked"
@@ -955,7 +969,6 @@ def acquire_network(
                 remote_url=connection.remote_url if connection is not None else None,
             ),
             limits=_remaining_limits(limits, deadline),
-            repository=source.identity,
         )
         _remaining_limits(limits, deadline)
         _validate_private_repository(paths.repository, lock.object_format)
@@ -1067,11 +1080,9 @@ def _run_git_ls_remote(
     arguments: Sequence[str],
     *,
     limits: Limits,
-    repository: str | None = None,
 ) -> bytes:
     """Run one ``ls-remote`` under the admission budget, capturing stdout."""
     environment = _operation_trust_environment(paths, tool, environment)
-    suffix = f" for {repository}" if repository else ""
     try:
         completed = subprocess.run(
             git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
@@ -1086,25 +1097,22 @@ def _run_git_ls_remote(
     except subprocess.TimeoutExpired as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
-            f"private Git resolution timed out{suffix}",
+            "private Git resolution timed out",
             failure_class="timeout",
             hints=_git_failure_hints(exc.stderr),
-            repository=repository,
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
-            f"private Git resolution failed{suffix}",
+            "private Git resolution failed",
             failure_class=_classify_git_failure_output(exc.stderr),
             hints=_git_failure_hints(exc.stderr),
-            repository=repository,
         ) from exc
     except OSError as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
-            f"private Git resolution failed{suffix}",
+            "private Git resolution failed",
             failure_class="unclassified",
-            repository=repository,
         ) from exc
     return completed.stdout
 
@@ -1147,7 +1155,10 @@ def resolve_network_ref(
     wanted = f"refs/tags/{ref_value}" if ref_kind == "tag" else f"refs/heads/{ref_value}"
     remote_url = source.git if connection is None else connection.remote_url
     _preflight_ssh(source, tool)
-    with tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root:
+    with (
+        _annotate_repository_failure(source.identity),
+        tempfile.TemporaryDirectory(prefix="csk-buildrepo-") as raw_root,
+    ):
         paths = _make_private_paths(Path(raw_root))
         _remaining_limits(limits, deadline)
         ssh_command = (
@@ -1217,7 +1228,6 @@ def resolve_network_ref(
                 wanted,
             ),
             limits=_remaining_limits(limits, deadline),
-            repository=source.identity,
         )
         _remaining_limits(limits, deadline)
         advertised = _parse_ls_remote(output, wanted=wanted, ref_kind=ref_kind)
@@ -1238,7 +1248,6 @@ def resolve_network_ref(
             f"--object-format={advertised.object_format}",
             "--ref-format=files",
             limits=_remaining_limits(limits, deadline),
-            repository=source.identity,
         )
         _remaining_limits(limits, deadline)
         destination = "refs/csk/resolution"
@@ -1255,7 +1264,6 @@ def resolve_network_ref(
                 remote_url=remote_url,
             ),
             limits=_remaining_limits(limits, deadline),
-            repository=source.identity,
         )
         _remaining_limits(limits, deadline)
         _validate_private_repository(paths.repository, advertised.object_format)
@@ -1672,10 +1680,8 @@ def _run_git(
     environment: Mapping[str, str],
     *arguments: str,
     limits: Limits,
-    repository: str | None = None,
 ) -> None:
     environment = _operation_trust_environment(paths, tool, environment)
-    suffix = f" for {repository}" if repository else ""
     try:
         subprocess.run(
             git_trust.pinned_command((os.fspath(tool.executable), *arguments), environment),
@@ -1690,26 +1696,23 @@ def _run_git(
     except subprocess.TimeoutExpired as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
-            f"private Git operation timed out{suffix}",
+            "private Git operation timed out",
             failure_class="timeout",
             hints=_git_failure_hints(exc.stderr),
-            repository=repository,
         ) from exc
     except subprocess.CalledProcessError as exc:
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
-            f"private Git operation failed{suffix}",
+            "private Git operation failed",
             failure_class=_classify_git_failure_output(exc.stderr),
             hints=_git_failure_hints(exc.stderr),
-            repository=repository,
         ) from exc
     except OSError as exc:
         operation = "initialization" if "init" in arguments else "fetch"
         raise GitAdmissionError(
             SOURCE_UNAVAILABLE,
-            f"private Git {operation} failed{suffix}",
+            f"private Git {operation} failed",
             failure_class="unclassified",
-            repository=repository,
         ) from exc
 
 

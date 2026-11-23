@@ -192,43 +192,6 @@ def format_exception(exc: BaseException) -> str | None:
     return None
 
 
-def _strip_url_credentials_for_subject(listed_url: str) -> str | None:
-    """Strip userinfo, query and fragment before structural endpoint re-parsing.
-
-    Used only as a fallback when a credential-bearing URL (such as HTTPS with
-    embedded userinfo or query tokens) is rejected by ``parse_endpoint_url``.
-    Returns ``None`` for inputs that do not resemble an ``https://``,
-    ``ssh://``, or scp Git URL, and callers still validate the stripped result
-    through ``parse_endpoint_url``.
-    """
-
-    if not listed_url or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in listed_url):
-        return None
-    for scheme in ("https://", "ssh://"):
-        if listed_url.startswith(scheme):
-            cleaned = listed_url.split("#", 1)[0].split("?", 1)[0]
-            rest = cleaned[len(scheme) :]
-            authority, separator, path = rest.partition("/")
-            if not separator or not authority or not path:
-                return None
-            host_port = authority.rsplit("@", 1)[-1]
-            if not host_port:
-                return None
-            return f"{scheme}{host_port}/{path}"
-    if "://" in listed_url:
-        return None
-    head, separator, path = listed_url.partition(":")
-    if not separator or not head or not path:
-        return None
-    clean_path = path.split("#", 1)[0].split("?", 1)[0]
-    if not clean_path:
-        return None
-    host = head.rsplit("@", 1)[-1]
-    if not host:
-        return None
-    return f"{host}:{clean_path}"
-
-
 def _validated_canonical_identity(value: object) -> str | None:
     if type(value) is not str:
         return None
@@ -251,13 +214,7 @@ def _structural_endpoint_subject(listed_url: str) -> str | None:
     try:
         parsed = repository_policy.parse_endpoint_url(listed_url)
     except repository_policy.RepositoryPolicyError:
-        stripped = _strip_url_credentials_for_subject(listed_url)
-        if stripped is None:
-            return None
-        try:
-            parsed = repository_policy.parse_endpoint_url(stripped)
-        except repository_policy.RepositoryPolicyError:
-            return None
+        return None
     port = "" if parsed.port is None else f":{parsed.port}"
     return f"{parsed.transport}://{parsed.host}{port}/{parsed.path}"
 
