@@ -6,7 +6,7 @@ import ast
 import inspect
 import json
 import textwrap
-from dataclasses import fields as dataclass_fields
+from dataclasses import fields as dataclass_fields, replace
 from pathlib import Path
 
 import pytest
@@ -339,27 +339,26 @@ def test_global_install_and_upgrade_refresh_build_provider_marker_when_requirers
     assert collected.builds[0].current
 
 
-@pytest.mark.parametrize("node_kind", ["project-marker-only", "hybrid-context", "hybrid-marker-only", "global-marker-only"])
-def test_marker_only_and_hybrid_nodes_refresh_on_requirers_change(
+@pytest.mark.parametrize("node_kind", ["project-marker-only", "global-marker-only"])
+def test_marker_only_nodes_refresh_on_requirers_change(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     skills_root: Path,
     csk_home: Path,
     node_kind: str,
 ) -> None:
-    # Context, hybrid and marker-only provider markers all refresh when requirers change at the same commit without rebuilding.
+    # Marker-only project and global provider nodes refresh when requirers change at the same commit without rebuilding.
     project = make_project(tmp_path)
     provider_repo, _ = make_skill_repo(
         skills_root, "provider", _build_skill_files("tool"), tag="v1"
     )
-    mode = "runtime" if "marker-only" in node_kind else "full"
     for consumer in ("consumer-a", "consumer-b"):
         make_skill_repo(
             skills_root,
             consumer,
             {
                 "csk-skill.json": _consumer_manifest(
-                    {"provider": _requirement(provider_repo, mode=mode)}
+                    {"provider": _requirement(provider_repo, mode="runtime")}
                 )
             },
             tag="v1",
@@ -386,34 +385,6 @@ def test_marker_only_and_hybrid_nodes_refresh_on_requirers_change(
         assert _read_marker_json(marker_path)["requirers"] == ["consumer-a", "consumer-b"]
         assert events == ["build:tool"]
         assert cli.main(["global", "status", "--check"]) == 0
-        return
-
-    if node_kind.startswith("hybrid-"):
-        write_skillfile(project, {"schema_version": 1, "agents": ["claude_code"], "skills": []})
-        _write_hybrid_manifest(
-            csk_home,
-            [{"name": "consumer-a", "tag": "v1", "targets": [str(project)]}],
-        )
-        assert cli.main(["install", "app"]) == 0
-        marker_path = hybrid.hybrid_skills_root(csk_home) / "provider" / ".csk-install.json"
-        expected_context = node_kind == "hybrid-context"
-        assert _read_marker_json(marker_path)["activation"] == {
-            "context": expected_context,
-            "commands": ["tool"],
-        }
-
-        _write_hybrid_manifest(
-            csk_home,
-            [
-                {"name": "consumer-a", "tag": "v1", "targets": [str(project)]},
-                {"name": "consumer-b", "tag": "v1", "targets": [str(project)]},
-            ],
-        )
-        assert cli.main(["status", "app", "--check"]) == 1
-        assert cli.main(["upgrade", "app"]) == 0
-        assert _read_marker_json(marker_path)["requirers"] == ["consumer-a", "consumer-b"]
-        assert events == ["build:tool"]
-        assert cli.main(["status", "app", "--check"]) == 0
         return
 
     write_skillfile(
@@ -444,6 +415,316 @@ def test_marker_only_and_hybrid_nodes_refresh_on_requirers_change(
     assert _read_marker_json(marker_path)["requirers"] == ["consumer-a", "consumer-b"]
     assert events == ["build:tool"]
     assert cli.main(["status", "app", "--check"]) == 0
+
+
+@pytest.mark.parametrize("node_kind", ["hybrid-context", "hybrid-marker-only"])
+def test_hybrid_nodes_refresh_on_closure_metadata_change_without_rebuilding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    node_kind: str,
+) -> None:
+    # Hybrid context and hybrid marker-only provider markers omit requirers and refresh on non-requirers closure metadata drift without rebuilding.
+    project = make_project(tmp_path)
+    provider_repo, _ = make_skill_repo(
+        skills_root, "provider", _build_skill_files("tool"), tag="v1"
+    )
+    mode = "runtime" if node_kind == "hybrid-marker-only" else "full"
+    make_skill_repo(
+        skills_root,
+        "consumer-a",
+        {
+            "csk-skill.json": _consumer_manifest(
+                {"provider": _requirement(provider_repo, mode=mode)}
+            )
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "agents": ["claude_code"], "skills": []})
+    _write_hybrid_manifest(
+        csk_home,
+        [{"name": "consumer-a", "tag": "v1", "targets": [str(project)]}],
+    )
+    cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
+    _save_config(monkeypatch, cfg)
+    events: list[str] = []
+    _install_fake_build_pipeline(monkeypatch, events=events)
+    _fixed_evidence(monkeypatch)
+
+    assert cli.main(["install", "app"]) == 0
+    marker_path = hybrid.hybrid_skills_root(csk_home) / "provider" / ".csk-install.json"
+    expected_context = node_kind == "hybrid-context"
+    initial = _read_marker_json(marker_path)
+    assert "requirers" not in initial
+    assert initial["activation"] == {
+        "context": expected_context,
+        "commands": ["tool"],
+    }
+    assert cli.main(["status", "app", "--check"]) == 0
+
+    drifted = dict(initial)
+    drifted["source"] = "stale/provider"
+    _write_marker_json(marker_path, drifted)
+    # Positive control: non-requirers closure drift on the hybrid marker is caught by status --check.
+    assert cli.main(["status", "app", "--check"]) == 1
+
+    assert cli.main(["upgrade", "app"]) == 0
+    refreshed = _read_marker_json(marker_path)
+    assert refreshed["source"] == initial["source"]
+    assert "requirers" not in refreshed
+    assert events == ["build:tool"]
+    assert cli.main(["status", "app", "--check"]) == 0
+
+
+def test_hybrid_shared_store_omits_requirers_across_projects_and_migrates_legacy_marker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+) -> None:
+    # Two projects sharing a hybrid-store skill with different consumers keep the shared marker byte-identical and both statuses clean, while a legacy hybrid marker carrying requirers migrates once without rebuilding and non-hybrid scopes still record requirers.
+    project_a = make_project(tmp_path, "project-a")
+    project_b = make_project(tmp_path, "project-b")
+    provider_repo, _ = make_skill_repo(
+        skills_root, "provider", _build_skill_files("tool"), tag="v1"
+    )
+    local_provider_repo, _ = make_skill_repo(
+        skills_root, "local-provider", _script_skill_files("local-tool"), tag="v1"
+    )
+    for consumer in ("consumer-a", "consumer-b"):
+        make_skill_repo(
+            skills_root,
+            consumer,
+            {"csk-skill.json": _consumer_manifest({"provider": _requirement(provider_repo)})},
+            tag="v1",
+        )
+    make_skill_repo(
+        skills_root,
+        "local-consumer",
+        {"csk-skill.json": _consumer_manifest({"local-provider": _requirement(local_provider_repo)})},
+        tag="v1",
+    )
+    write_skillfile(
+        project_a,
+        {
+            "schema_version": 1,
+            "agents": ["claude_code"],
+            "skills": [{"name": "local-consumer", "tag": "v1"}],
+        },
+    )
+    write_skillfile(project_b, {"schema_version": 1, "agents": ["claude_code"], "skills": []})
+    _write_hybrid_manifest(
+        csk_home,
+        [
+            {"name": "consumer-a", "tag": "v1", "targets": [str(project_a), str(project_b)]},
+            {"name": "consumer-b", "tag": "v1", "targets": [str(project_b)]},
+        ],
+    )
+    _write_global_skillfile(
+        csk_home,
+        [{"name": "local-consumer", "tag": "v1"}],
+        agents=["claude_code"],
+    )
+    cfg = replace(
+        make_config(csk_home, skills_root, project_a, agents=["claude_code"]),
+        projects={
+            "app-a": config_mod.ProjectConfig(alias="app-a", path=project_a, agents=["claude_code"]),
+            "app-b": config_mod.ProjectConfig(alias="app-b", path=project_b, agents=["claude_code"]),
+        },
+    )
+    _save_config(monkeypatch, cfg)
+    events: list[str] = []
+    _install_fake_build_pipeline(monkeypatch, events=events)
+    _fixed_evidence(monkeypatch)
+
+    assert cli.main(["install", "app-a"]) == 0
+    assert cli.main(["install", "app-b"]) == 0
+    assert cli.main(["global", "install"]) == 0
+    assert events == ["build:tool"]
+
+    hybrid_marker = hybrid.hybrid_skills_root(csk_home) / "provider" / ".csk-install.json"
+    hybrid_payload = _read_marker_json(hybrid_marker)
+    assert "requirers" not in hybrid_payload
+    assert cli.main(["status", "app-a", "--check"]) == 0
+    assert cli.main(["status", "app-b", "--check"]) == 0
+
+    # Alternating installs across projects with different consumer sets keep the hybrid marker byte-identical.
+    before_bytes = _set_old_installed_at(hybrid_marker)
+    for alias in ("app-a", "app-b", "app-a"):
+        res = installer.install(cfg, alias=alias)[0]
+        assert not res.errors, res.errors
+        assert any("provider" in msg and msg.endswith(" up-to-date") for msg in res.messages), res.messages
+    assert hybrid_marker.read_bytes() == before_bytes
+    assert events == ["build:tool"]
+    assert cli.main(["status", "app-a", "--check"]) == 0
+    assert cli.main(["status", "app-b", "--check"]) == 0
+
+    # One-time migration: an existing hybrid marker still carrying requirers rewrites once without rebuilding or altering content_sha256.
+    original_content_sha = hybrid_payload["content_sha256"]
+    legacy_hybrid = _read_marker_json(hybrid_marker)
+    legacy_hybrid["requirers"] = ["consumer-a"]
+    legacy_hybrid["installed_at"] = OLD_INSTALLED_AT
+    _write_marker_json(hybrid_marker, legacy_hybrid)
+    assert cli.main(["status", "app-a", "--check"]) == 1
+    assert cli.main(["status", "app-b", "--check"]) == 1
+
+    migrated_res = installer.install(cfg, alias="app-a")[0]
+    assert not migrated_res.errors, migrated_res.errors
+    assert any("provider" in msg and msg.endswith(" installed") for msg in migrated_res.messages), migrated_res.messages
+    migrated = _read_marker_json(hybrid_marker)
+    assert "requirers" not in migrated
+    assert migrated["content_sha256"] == original_content_sha
+    assert events == ["build:tool"]
+    assert cli.main(["status", "app-a", "--check"]) == 0
+    assert cli.main(["status", "app-b", "--check"]) == 0
+
+    post_migration_bytes = _set_old_installed_at(hybrid_marker)
+    second_res = installer.install(cfg, alias="app-b")[0]
+    assert not second_res.errors, second_res.errors
+    assert any("provider" in msg and msg.endswith(" up-to-date") for msg in second_res.messages), second_res.messages
+    assert hybrid_marker.read_bytes() == post_migration_bytes
+    assert events == ["build:tool"]
+
+    # Positive control: project-local and global markers still record and compare requirers.
+    local_marker = project_a / ".agents" / "skills" / "local-provider" / ".csk-install.json"
+    global_marker = global_install.global_skills_root(csk_home) / "local-provider" / ".csk-install.json"
+    assert _read_marker_json(local_marker)["requirers"] == ["local-consumer"]
+    assert _read_marker_json(global_marker)["requirers"] == ["local-consumer"]
+    for scope_marker, status_cmd in (
+        (local_marker, ["status", "app-a", "--check"]),
+        (global_marker, ["global", "status", "--check"]),
+    ):
+        stale = _read_marker_json(scope_marker)
+        stale["requirers"] = ["local-consumer", "ghost-consumer"]
+        _write_marker_json(scope_marker, stale)
+        assert cli.main(status_cmd) == 1
+
+
+def test_global_selective_only_preserves_unselected_requirers_and_retention(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    skills_root: Path,
+    csk_home: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Selective global runs (--only provider / --only consumer) preserve unselected live requirers and <project> when directly declared, keep global status --check clean and retain not-revalidated warnings.
+    project = make_project(tmp_path)
+    provider_repo, _ = make_skill_repo(skills_root, "provider", _script_skill_files("tool"), tag="v1")
+    make_skill_repo(
+        skills_root,
+        "consumer-a",
+        {"csk-skill.json": _consumer_manifest({"provider": _requirement(provider_repo)})},
+        tag="v1",
+    )
+    consumer_b_repo, _ = make_skill_repo(
+        skills_root,
+        "consumer-b",
+        {"csk-skill.json": _consumer_manifest({"provider": _requirement(provider_repo)})},
+        tag="v1",
+    )
+    write_files(
+        consumer_b_repo,
+        {"csk-skill.json": json.dumps({"schema_version": 4, "capabilities": CAPS})},
+    )
+    commit_all(consumer_b_repo, "drop provider requirement")
+    run(["git", "tag", "v2"], consumer_b_repo)
+
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+    global_marker = global_install.global_skills_root(csk_home) / "provider" / ".csk-install.json"
+
+    # Case 1: provider is directly declared alongside two consumers.
+    _write_global_skillfile(
+        csk_home,
+        [
+            {"name": "consumer-a", "tag": "v1"},
+            {"name": "consumer-b", "tag": "v1"},
+            {"name": "provider", "tag": "v1"},
+        ],
+    )
+    assert cli.main(["global", "install"]) == 0
+    assert _read_marker_json(global_marker)["requirers"] == ["<project>", "consumer-a", "consumer-b"]
+    assert cli.main(["global", "status", "--check"]) == 0
+
+    before_bytes = _set_old_installed_at(global_marker)
+    capsys.readouterr()
+
+    # --only provider keeps requirers intact, leaves marker byte-identical, and keeps retention warning alive across repeated runs.
+    for _ in range(2):
+        assert cli.main(["global", "install", "--only", "provider"]) == 0
+        out = capsys.readouterr().out
+        assert "consumer-a" in out and "consumer-b" in out and "were not revalidated" in out
+        assert global_marker.read_bytes() == before_bytes
+        assert _read_marker_json(global_marker)["requirers"] == ["<project>", "consumer-a", "consumer-b"]
+        assert cli.main(["global", "status", "--check"]) == 0
+        capsys.readouterr()
+
+    # --only consumer-a also preserves both the retained consumer-b and direct <project> requirer.
+    assert cli.main(["global", "install", "--only", "consumer-a"]) == 0
+    out_consumer = capsys.readouterr().out
+    assert "consumer-b" in out_consumer and "were not revalidated" in out_consumer
+    assert global_marker.read_bytes() == before_bytes
+    assert _read_marker_json(global_marker)["requirers"] == ["<project>", "consumer-a", "consumer-b"]
+    assert cli.main(["global", "status", "--check"]) == 0
+    capsys.readouterr()
+
+    # Even when --only provider actually rewrites the marker (e.g., new commit on branch), unselected requirers are preserved.
+    write_files(provider_repo, {"SKILL.md": "---\nname: test\n---\n\n# Updated\n"})
+    new_commit = commit_all(provider_repo, "provider update")
+    run(["git", "tag", "v2"], provider_repo)
+    _write_global_skillfile(
+        csk_home,
+        [
+            {"name": "consumer-a", "tag": "v1"},
+            {"name": "consumer-b", "tag": "v1"},
+            {"name": "provider", "tag": "v2"},
+        ],
+    )
+    capsys.readouterr()
+    assert cli.main(["global", "upgrade", "--only", "provider"]) == 0
+    upgrade_out = capsys.readouterr().out
+    assert "consumer-a" in upgrade_out and "consumer-b" in upgrade_out and "were not revalidated" in upgrade_out
+    upgraded_marker = _read_marker_json(global_marker)
+    assert upgraded_marker["commit"] == new_commit
+    assert upgraded_marker["requirers"] == ["<project>", "consumer-a", "consumer-b"]
+
+    # Repeat --only provider after the rewrite: retention still warns about both consumers.
+    assert cli.main(["global", "install", "--only", "provider"]) == 0
+    repeat_out = capsys.readouterr().out
+    assert "consumer-a" in repeat_out and "consumer-b" in repeat_out and "were not revalidated" in repeat_out
+
+    # Case 2: provider is NOT directly declared (only transitively required by consumer-a and consumer-b).
+    _write_global_skillfile(
+        csk_home,
+        [
+            {"name": "consumer-a", "tag": "v1"},
+            {"name": "consumer-b", "tag": "v1"},
+        ],
+    )
+    assert cli.main(["global", "install"]) == 0
+    assert _read_marker_json(global_marker)["requirers"] == ["consumer-a", "consumer-b"]
+    transitive_bytes = _set_old_installed_at(global_marker)
+    capsys.readouterr()
+
+    assert cli.main(["global", "install", "--only", "consumer-a"]) == 0
+    out_transitive = capsys.readouterr().out
+    assert "consumer-b" in out_transitive and "were not revalidated" in out_transitive
+    assert global_marker.read_bytes() == transitive_bytes
+    assert _read_marker_json(global_marker)["requirers"] == ["consumer-a", "consumer-b"]
+    assert cli.main(["global", "status", "--check"]) == 0
+
+    # Positive control: a full global install (without --only) shrinks requirers once consumer-b drops provider.
+    _write_global_skillfile(
+        csk_home,
+        [
+            {"name": "consumer-a", "tag": "v1"},
+            {"name": "consumer-b", "tag": "v2"},
+        ],
+    )
+    assert cli.main(["global", "install"]) == 0
+    assert _read_marker_json(global_marker)["requirers"] == ["consumer-a"]
+    assert cli.main(["global", "status", "--check"]) == 0
 
 
 def test_requirers_shrinking_refreshes_marker_and_updates_global_retention(
@@ -522,10 +803,12 @@ def test_requirers_shrinking_refreshes_marker_and_updates_global_retention(
     assert _read_marker_json(global_marker)["requirers"] == ["<project>", "consumer-a", "consumer-b"]
     capsys.readouterr()
 
-    # Positive control: while consumer-b still requires provider, --only provider warns about both.
+    # Positive control: while consumer-b still requires provider, --only provider warns about both without shrinking requirers.
     assert cli.main(["global", "install", "--only", "provider"]) == 0
     before_warning = capsys.readouterr().out
     assert "consumer-a" in before_warning and "consumer-b" in before_warning
+    assert _read_marker_json(global_marker)["requirers"] == ["<project>", "consumer-a", "consumer-b"]
+    assert cli.main(["global", "status", "--check"]) == 0
 
     _write_global_skillfile(
         csk_home,
@@ -545,6 +828,8 @@ def test_requirers_shrinking_refreshes_marker_and_updates_global_retention(
     after_warning = capsys.readouterr().out
     assert "consumer-a" in after_warning
     assert "consumer-b" not in after_warning
+    assert _read_marker_json(global_marker)["requirers"] == ["<project>", "consumer-a"]
+    assert cli.main(["global", "status", "--check"]) == 0
 
 
 @pytest.mark.parametrize(
@@ -701,6 +986,7 @@ def test_unchanged_closure_keeps_marker_bytes_identical(
         "global-context": global_install.global_skills_root(csk_home) / "consumer-a" / ".csk-install.json",
         "global-marker-only-build": global_install.global_skills_root(csk_home) / "provider" / ".csk-install.json",
     }
+    assert "requirers" not in _read_marker_json(marker_paths["hybrid-context"])
     before_bytes = {label: _set_old_installed_at(path) for label, path in marker_paths.items()}
 
     proj_result = installer.install(cfg, options=installer.InstallOptions(fetch=True))[0]
