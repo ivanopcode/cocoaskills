@@ -269,8 +269,23 @@ def resolve_git_alias(
             policy_path=mode.policy_path,
             tool_for_endpoint=mode.tool_for_endpoint,
         )
+    except source_transport.TransportResolutionError as exc:
+        if exc.identity is None:
+            exc.identity = identity
+        exc.add_note(f"skill source {alias!r} (repository {identity!r})")
+        raise
     except source_transport.TransportError as exc:
         raise _transport_failure(f"Source {alias!r}", exc) from exc
+    except git_admission.GitAdmissionError as exc:
+        if exc.failure_class == "ref-missing":
+            raise SourceError(
+                CODE_MEMBER_MISSING,
+                f"Source {alias!r} declares a ref the remote does not advertise: {exc}",
+            ) from exc
+        if exc.repository is None:
+            exc.repository = identity
+        exc.add_note(f"skill source {alias!r} (repository {identity!r})")
+        raise
     resolved = AliasResolution(
         identity=identity, commit=result.lock.hex, object_format=result.lock.object_format
     )
@@ -319,8 +334,18 @@ def acquire_git_commit(
             policy_path=mode.policy_path,
             tool_for_endpoint=mode.tool_for_endpoint,
         )
+    except source_transport.TransportResolutionError as exc:
+        if exc.identity is None:
+            exc.identity = identity
+        exc.add_note(f"skill source repository {identity!r}")
+        raise
     except source_transport.TransportError as exc:
         raise _transport_failure(label, exc) from exc
+    except git_admission.GitAdmissionError as exc:
+        if exc.repository is None:
+            exc.repository = identity
+        exc.add_note(f"skill source repository {identity!r}")
+        raise
     if result.snapshot.commit != commit:
         raise SourceError(
             CODE_MEMBER_INVALID,
@@ -360,8 +385,16 @@ def acquire_locked_git_commit(
             policy_path=recovery.policy_path,
             tool_for_endpoint=recovery.tool_for_endpoint,
         )
+    except source_transport.TransportResolutionError as exc:
+        if exc.identity is None:
+            exc.identity = identity
+        raise
     except source_transport.TransportError as exc:
         raise _transport_failure(label, exc) from exc
+    except git_admission.GitAdmissionError as exc:
+        if exc.repository is None:
+            exc.repository = identity
+        raise
     if (
         result.snapshot.commit != commit.hex
         or result.snapshot.object_format != commit.object_format

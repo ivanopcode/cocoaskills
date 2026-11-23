@@ -103,9 +103,9 @@ NEXT_BY_FAILURE_CLASS: Final[dict[str, str]] = {
     "connection-refused": "check the repository host, port and network access",
     "timeout": "check network access and whether SSH is waiting for a passphrase, PIN or key touch; retry when ready",
     "endpoint-unavailable": "check the listed repository endpoint and retry",
-    "auth-unavailable": "select usable credentials with csk config build-ssh add or csk config build-https add",
+    "auth-unavailable": "inspect local SSH setup with csk config build-ssh doctor, or select usable credentials with csk config build-ssh add or csk config build-https add",
     "auth-rejected": "verify the selected account has read access to the repository",
-    "ssh-auth-rejected": "the key may be unusable locally (a passphrase key may not be loaded in a capable agent), or the server may deny repository read access; review csk config build-ssh list and check both key usability and account access",
+    "ssh-auth-rejected": "the key may be unusable locally (a passphrase key may not be loaded in a capable agent), or the server may deny repository read access; review csk config build-ssh list, run csk config build-ssh doctor to inspect local SSH setup, or configure HTTPS with csk config build-https, and check both key usability and account access",
     "http-401": "check the selected HTTPS credential and repository read access",
     "http-403": "grant the selected account repository read access or select an authorized credential",
     "host-key": "verify the host fingerprint with the repository operator and update the selected known_hosts file",
@@ -123,7 +123,7 @@ NEXT_BY_FAILURE_CLASS: Final[dict[str, str]] = {
     "http-404": "verify the repository URL and the selected account's read access",
     "malformed-response": "check the repository service response before retrying",
     "partial-response": "check the repository service and network before retrying",
-    "unclassified": "review csk config build-ssh list, then check the selected Git/SSH command locally with stderr attached; csk --verbose shows the safe cause chain",
+    "unclassified": "review csk config build-ssh list, run csk config build-ssh doctor, or configure HTTPS with csk config build-https, then check the selected Git/SSH command locally with stderr attached; csk --verbose shows the safe cause chain",
 }
 for _status in ("http-502", "http-503", "http-504"):
     NEXT_BY_FAILURE_CLASS[_status] = "check repository service availability and retry"
@@ -192,6 +192,52 @@ def format_exception(exc: BaseException) -> str | None:
     return None
 
 
+def _strip_url_credentials_for_subject(listed_url: str) -> str | None:
+    """Strip userinfo, query and fragment before structural endpoint re-parsing.
+
+    Used only as a fallback when a credential-bearing URL (such as HTTPS with
+    embedded userinfo or query tokens) is rejected by ``parse_endpoint_url``.
+    Returns ``None`` for inputs that do not resemble an ``https://``,
+    ``ssh://``, or scp Git URL, and callers still validate the stripped result
+    through ``parse_endpoint_url``.
+    """
+
+    if not listed_url or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in listed_url):
+        return None
+    for scheme in ("https://", "ssh://"):
+        if listed_url.startswith(scheme):
+            cleaned = listed_url.split("#", 1)[0].split("?", 1)[0]
+            rest = cleaned[len(scheme) :]
+            authority, separator, path = rest.partition("/")
+            if not separator or not authority or not path:
+                return None
+            host_port = authority.rsplit("@", 1)[-1]
+            if not host_port:
+                return None
+            return f"{scheme}{host_port}/{path}"
+    if "://" in listed_url:
+        return None
+    head, separator, path = listed_url.partition(":")
+    if not separator or not head or not path:
+        return None
+    clean_path = path.split("#", 1)[0].split("?", 1)[0]
+    if not clean_path:
+        return None
+    host = head.rsplit("@", 1)[-1]
+    if not host:
+        return None
+    return f"{host}:{clean_path}"
+
+
+def _validated_canonical_identity(value: object) -> str | None:
+    if type(value) is not str:
+        return None
+    try:
+        return repository_policy.validate_canonical_identity(value)
+    except repository_policy.RepositoryPolicyError:
+        return None
+
+
 def _structural_endpoint_subject(listed_url: str) -> str | None:
     """Render one endpoint URL from its parsed parts, never verbatim.
 
@@ -205,7 +251,13 @@ def _structural_endpoint_subject(listed_url: str) -> str | None:
     try:
         parsed = repository_policy.parse_endpoint_url(listed_url)
     except repository_policy.RepositoryPolicyError:
-        return None
+        stripped = _strip_url_credentials_for_subject(listed_url)
+        if stripped is None:
+            return None
+        try:
+            parsed = repository_policy.parse_endpoint_url(stripped)
+        except repository_policy.RepositoryPolicyError:
+            return None
     port = "" if parsed.port is None else f":{parsed.port}"
     return f"{parsed.transport}://{parsed.host}{port}/{parsed.path}"
 
@@ -237,12 +289,16 @@ def transport_failure_reason(exc: BaseException) -> str:
                 )
                 if isinstance(candidate, str) and candidate:
                     first_url = candidate
+    identity = _validated_canonical_identity(getattr(exc, "identity", None))
     if classifications:
         reason = "repository endpoint unavailable: " + ", ".join(classifications)
-        if first_url is not None:
-            subject = _structural_endpoint_subject(first_url)
-            if subject is not None:
-                reason += f" for {subject}"
+        subject = _structural_endpoint_subject(first_url) if first_url is not None else None
+        if subject is not None:
+            reason += f" for {subject}"
+            if identity is not None and identity not in subject:
+                reason += f" (repository {identity})"
+        elif identity is not None:
+            reason += f" for {identity}"
         return reason
     cause = exc.__cause__
     if isinstance(
@@ -251,7 +307,10 @@ def transport_failure_reason(exc: BaseException) -> str:
         return cause.detail
     failure_class = getattr(exc, "failure_class", None)
     if isinstance(failure_class, str) and failure_class:
-        return f"transport failure class {failure_class}"
+        suffix = f" for {identity}" if identity is not None else ""
+        return f"transport failure class {failure_class}{suffix}"
+    if identity is not None:
+        return f"transport refusal recorded without attempt detail for {identity}"
     return "transport refusal recorded without attempt detail"
 
 

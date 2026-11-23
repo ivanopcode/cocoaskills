@@ -237,8 +237,14 @@ class TransportFailure(TransportError):
 class TransportResolutionError(TransportError):
     """The bounded endpoint list was exhausted without a verified snapshot."""
 
-    def __init__(self, attempts: tuple[AttemptDiagnostic, ...]) -> None:
+    def __init__(
+        self,
+        attempts: tuple[AttemptDiagnostic, ...],
+        *,
+        identity: str | None = None,
+    ) -> None:
         self.diagnostics = attempts
+        self.identity = identity
         classes = ", ".join(
             f"attempt {item.ordinal}={item.classification}" for item in attempts
         ) or "no attempts"
@@ -416,16 +422,26 @@ def _failure_code(failure_class: str, code: str | None) -> str:
 
 
 def _original_failure(
-    error: GitAdmissionError, failure_class: str, code: str
+    error: GitAdmissionError,
+    failure_class: str,
+    code: str,
+    *,
+    repository: str | None = None,
 ) -> GitAdmissionError:
+    repo = repository or error.repository
     failure = GitAdmissionError(
         code,
         str(error).removeprefix(f"{code}: ")
         if code == git_trust.INVALID
         and isinstance(error.__cause__, git_trust.GitTrustError)
-        else "trusted Git admission failed",
+        else (
+            f"trusted Git admission failed for {repo}"
+            if repo
+            else "trusted Git admission failed"
+        ),
         failure_class=failure_class,
         hints=error.hints,
+        repository=repo,
     )
     failure.__cause__ = error
     return failure
@@ -452,9 +468,17 @@ def _normalise_failure(error: BaseException) -> TransportFailure:
     )
 
 
-def _raise_first_failure(failure: TransportFailure) -> None:
+def _raise_first_failure(
+    failure: TransportFailure,
+    *,
+    identity: str | None = None,
+) -> None:
     if failure.original is not None:
+        if identity is not None and failure.original.repository is None:
+            failure.original.repository = identity
         raise failure.original
+    if identity is not None and failure.repository is None:
+        failure.repository = identity
     raise failure
 
 
@@ -500,7 +524,7 @@ def acquire_plan(
         # budget. An endpoint must never receive more than the caller allowed.
         remaining = min(limits.timeout_seconds, deadline - clock())
         if remaining <= 0:
-            raise TransportResolutionError(tuple(diagnostics))
+            raise TransportResolutionError(tuple(diagnostics), identity=plan.identity)
         attempt_limits = replace(limits, timeout_seconds=remaining)
         try:
             # Provider selection is part of the endpoint attempt.  It can
@@ -550,8 +574,8 @@ def acquire_plan(
             if alternate is not None and index == 0:
                 continue
             if repository_policy.classify_failure(failure_class) == "forbidden":
-                _raise_first_failure(failure)
-            raise TransportResolutionError(tuple(diagnostics))
+                _raise_first_failure(failure, identity=plan.identity)
+            raise TransportResolutionError(tuple(diagnostics), identity=plan.identity)
         diagnostics.append(
             AttemptDiagnostic(
                 ordinal=index + 1,
@@ -561,7 +585,7 @@ def acquire_plan(
             )
         )
         return AcquisitionResult(snapshot=snapshot, attempts=tuple(diagnostics))
-    raise TransportResolutionError(tuple(diagnostics))
+    raise TransportResolutionError(tuple(diagnostics), identity=plan.identity)
 
 
 def acquire(
@@ -693,7 +717,7 @@ def resolve_plan(
     for index, endpoint in enumerate(plan.endpoints[:maximum]):
         remaining = min(limits.timeout_seconds, deadline - clock())
         if remaining <= 0:
-            raise TransportResolutionError(tuple(diagnostics))
+            raise TransportResolutionError(tuple(diagnostics), identity=plan.identity)
         attempt_limits = replace(limits, timeout_seconds=remaining)
         try:
             selected_tool = (
@@ -739,8 +763,8 @@ def resolve_plan(
             if alternate is not None and index == 0:
                 continue
             if repository_policy.classify_failure(failure_class) == "forbidden":
-                _raise_first_failure(failure)
-            raise TransportResolutionError(tuple(diagnostics))
+                _raise_first_failure(failure, identity=plan.identity)
+            raise TransportResolutionError(tuple(diagnostics), identity=plan.identity)
         diagnostics.append(
             AttemptDiagnostic(
                 ordinal=index + 1,
@@ -750,7 +774,7 @@ def resolve_plan(
             )
         )
         return ResolutionResult(lock=lock, attempts=tuple(diagnostics))
-    raise TransportResolutionError(tuple(diagnostics))
+    raise TransportResolutionError(tuple(diagnostics), identity=plan.identity)
 
 
 def resolve_ref(

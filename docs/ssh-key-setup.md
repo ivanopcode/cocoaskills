@@ -194,8 +194,12 @@ Transport actions and hints carry their attempt number, such as
 hints too. Hints do not change the failure class or fallback rules. See
 [preflight refusals](troubleshooting.md#build_repository_ssh_credential_unusable)
 and [diagnostic actions](troubleshooting.md#ssh-diagnostic-actions).
-An `ssh-auth-rejected` result can mean local key unusability or denied
-repository access; check both. For `unclassified`, review
+Private Git failures name the credential-free canonical repository identity
+they failed on. An `ssh-auth-rejected` result can mean local key unusability
+or denied repository access; check both. For `ssh-auth-rejected`,
+`auth-unavailable` and `unclassified`, the `next:` action points to the
+read-only `csk config build-ssh doctor` check and the HTTPS alternative
+`csk config build-https`. For `unclassified`, review
 `csk config build-ssh list` and reproduce the selected Git/SSH command
 locally with stderr attached. `csk --verbose` shows the safe cause chain,
 without adding raw SSH output. Older releases may still show a generic

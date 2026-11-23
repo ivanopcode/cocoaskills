@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs (`--only`) preserve unselected live `requirers`, and shared hybrid-store
   markers omit per-project `requirers` (migrating existing hybrid markers once
   without rebuilding).
+- Name the credential-free canonical repository identity in rendered private Git
+  failures on both skill source fetches and external build-source fetches,
+  preserving failure classes and fixed next steps without exposing URL userinfo,
+  tokens or raw child stderr.
+- Mention `csk config build-ssh doctor` and `csk config build-https` in the
+  fixed `next:` advice for `ssh-auth-rejected`, `auth-unavailable` and
+  `unclassified` transport failures.
 
 ## [0.23.0] - 2026-11-13
 

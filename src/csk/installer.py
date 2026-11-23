@@ -167,6 +167,12 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
         )
     ):
         message = terminal_text(message)
+        repository = _validated_repository_identity(exc, chain)
+        if repository is not None:
+            safe_repository = terminal_text(repository)
+            if safe_repository not in message:
+                first_line, sep, rest = message.partition("\n")
+                message = f"{first_line} for {safe_repository}{sep}{rest}"
     if isinstance(exc, git_admission.GitAdmissionError) and exc.failure_class:
         failure_class = (
             exc.failure_class
@@ -183,6 +189,46 @@ def failure_text(exc: BaseException, *, verbose: bool = False) -> str:
     if verbose and chain:
         lines.extend(_failure_cause_lines(chain, root=exc))
     return "\n".join(lines)
+
+
+def _validated_repository_identity(
+    exc: BaseException,
+    chain: list[BaseException],
+) -> str | None:
+    for item in (exc, *chain):
+        candidate = getattr(item, "repository", None)
+        if isinstance(candidate, str) and candidate:
+            try:
+                return repository_policy.validate_canonical_identity(candidate)
+            except repository_policy.RepositoryPolicyError:
+                continue
+    return None
+
+
+def _transport_cause_next_lines(cause: BaseException) -> list[str]:
+    if isinstance(cause, source_transport.TransportResolutionError):
+        attempts = getattr(cause, "attempts", ())
+        if isinstance(attempts, tuple) and attempts:
+            return [
+                source_diagnostics.transport_next_steps(
+                    getattr(attempt, "classification", "unclassified"),
+                    getattr(attempt, "hints", ()),
+                    ordinal=attempt.ordinal if type(attempt.ordinal) is int else index,
+                )
+                for index, attempt in enumerate(attempts, 1)
+            ]
+        return []
+    if isinstance(cause, git_admission.GitAdmissionError) and cause.failure_class:
+        failure_class = (
+            cause.failure_class
+            if cause.failure_class in source_diagnostics.NEXT_BY_FAILURE_CLASS
+            else "unclassified"
+        )
+        return [
+            f"failure class: {failure_class}",
+            source_diagnostics.transport_next_steps(failure_class, cause.hints),
+        ]
+    return []
 
 
 def _failure_cause_lines(
@@ -823,19 +869,32 @@ def _schema2_failure_text(exc: BaseException, *, verbose: bool = False) -> str:
 
     rendered = source_diagnostics.format_exception(exc)
     if rendered is not None:
+        lines = [rendered]
+        cause = exc.__cause__
+        if (
+            isinstance(exc, source_errors.SourceError)
+            and exc.code == source_errors.CODE_SNAPSHOT_UNAVAILABLE
+            and cause is not None
+        ):
+            lines.extend(_transport_cause_next_lines(cause))
         if verbose:
             chain = list(_failure_cause_chain(exc))
             if chain:
-                return "\n".join([rendered, *_failure_cause_lines(chain)])
-        return rendered
+                lines.extend(_failure_cause_lines(chain))
+        return "\n".join(lines)
     if isinstance(exc, source_transport.TransportError):
         rendered = source_diagnostics.format_transport_exception(exc)
         if rendered is not None:
+            notes = [
+                _sanitize_failure_secrets(note)
+                for note in getattr(exc, "__notes__", ())
+            ]
+            lines = [rendered, *notes]
             if verbose:
                 chain = list(_failure_cause_chain(exc))
                 if chain:
-                    return "\n".join([rendered, *_failure_cause_lines(chain)])
-            return rendered
+                    lines.extend(_failure_cause_lines(chain))
+            return "\n".join(lines)
     return failure_text(exc, verbose=verbose)
 
 
