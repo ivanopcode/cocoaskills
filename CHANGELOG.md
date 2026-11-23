@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh installed skill markers on project and global `csk install` and
+  `csk upgrade` (across context, hybrid and marker-only nodes) whenever closure
+  metadata such as `requirers`, `dependencies`, `requirements`, `runtime_roots`,
+  `source` or `git` changes at the same commit. Installer currentness and
+  `csk status --check` now share one closure-comparison definition so unchanged
+  closures keep their marker byte-identical while changed closure metadata
+  rewrites the marker without rebuilding cached build artifacts.
+
 ## [0.23.0] - 2026-11-13
 
 ### Upgrade notes

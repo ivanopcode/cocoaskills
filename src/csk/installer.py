@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -4573,8 +4573,16 @@ def _install_skill_context_to_root(
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(
-        marker, target, plan, effective_locale, agents,
-        activation=activation, substituted=substituted, mcp_servers=mcp_servers, attestation=attestation,
+        marker,
+        target,
+        plan,
+        effective_locale,
+        agents,
+        activation=activation,
+        requirers=requirers,
+        substituted=substituted,
+        mcp_servers=mcp_servers,
+        attestation=attestation,
         builds=builds,
         build_source_identity=build_source_identity,
     ):
@@ -4640,8 +4648,16 @@ def _install_marker_only(
     target = target_root / plan.decl.name
     marker = _read_marker(target / ".csk-install.json")
     if _marker_is_current(
-        marker, target, plan, None, [], activation=activation, substituted=substituted,
-        mcp_servers=mcp_servers, attestation=attestation,
+        marker,
+        target,
+        plan,
+        None,
+        [],
+        activation=activation,
+        requirers=requirers,
+        substituted=substituted,
+        mcp_servers=mcp_servers,
+        attestation=attestation,
         builds=builds,
         build_source_identity=build_source_identity,
     ):
@@ -4671,6 +4687,141 @@ def _install_marker_only(
     return "installed"
 
 
+def _coerce_marker_activation(
+    activation: dict[str, object] | None,
+) -> install_marker.MarkerActivation | None:
+    if activation is None:
+        return None
+    activation_commands = activation.get("commands", [])
+    if not isinstance(activation_commands, list) or not all(
+        isinstance(command, str) for command in activation_commands
+    ):
+        raise InstallError("marker activation.commands must be a list of strings")
+    context = activation.get("context")
+    if not isinstance(context, bool):
+        raise InstallError("marker activation.context must be a boolean")
+    return install_marker.MarkerActivation(
+        context=context,
+        commands=tuple(sorted(set(activation_commands))),
+    )
+
+
+def _coerce_marker_attestation(
+    attestation: dict[str, object] | None,
+) -> install_marker.MarkerAttestation | None:
+    if attestation is None:
+        return None
+    registry = attestation.get("registry")
+    status = attestation.get("status")
+    key_id = attestation.get("key_id")
+    if (
+        not isinstance(registry, str)
+        or not isinstance(status, str)
+        or (key_id is not None and not isinstance(key_id, str))
+    ):
+        raise InstallError("marker attestation is invalid")
+    return install_marker.MarkerAttestation(
+        registry=registry,
+        status=status,
+        key_id=key_id,
+    )
+
+
+def _normalize_marker_builds_v3(
+    builds: Mapping[str, install_marker.MarkerBuild] | None,
+) -> dict[str, install_marker.InstallMarkerBuildV3]:
+    marker_builds: dict[str, install_marker.InstallMarkerBuildV3] = {}
+    for name, build in (builds or {}).items():
+        if isinstance(build, install_marker.InstallMarkerBuildV3):
+            marker_builds[name] = build
+        else:
+            marker_builds[name] = install_marker.InstallMarkerBuildV3(
+                driver=build.driver,
+                receipt_schema_version=1,
+                execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
+                cache_key=build.cache_key,
+                receipt_sha256=build.receipt_sha256,
+                artifact_sha256=build.artifact_sha256,
+                artifact_path=build.artifact_path,
+            )
+    return marker_builds
+
+
+def _normalize_marker_builds_v2(
+    builds: Mapping[str, install_marker.MarkerBuild] | None,
+) -> dict[str, install_marker.InstallMarkerBuild]:
+    local_builds = {
+        name: build
+        for name, build in (builds or {}).items()
+        if isinstance(build, install_marker.InstallMarkerBuild)
+    }
+    if len(local_builds) != len(builds or {}):
+        raise InstallError("external marker state requires skill schema 7 or newer")
+    return local_builds
+
+
+def _expected_marker_builds_json(
+    schema_version: int,
+    builds: Mapping[str, install_marker.MarkerBuild] | None,
+) -> dict[str, dict[str, Any]]:
+    if schema_version >= 7:
+        v3_builds = _normalize_marker_builds_v3(builds)
+        return {name: v3_builds[name].to_json() for name in sorted(v3_builds)}
+    v2_builds = _normalize_marker_builds_v2(builds)
+    return {name: v2_builds[name].to_json() for name in sorted(v2_builds)}
+
+
+def _expected_legacy_marker_closure(
+    *,
+    name: str,
+    decl: manifest.SkillDecl,
+    resolved: git_ops.ResolvedRef,
+    spec: skillspec.SkillSpec,
+    locale_value: str | None,
+    agents: Sequence[str],
+    activation: install_marker.MarkerActivation | None,
+    requirers: Sequence[str] | None,
+    substituted: str | None,
+) -> install_marker.LegacyMarkerClosure:
+    return install_marker.LegacyMarkerClosure(
+        name=name,
+        source=decl.source,
+        ref_kind=resolved.kind,
+        ref=resolved.ref,
+        commit=resolved.commit,
+        git=decl.git,
+        locale=locale_value,
+        agents=tuple(agents),
+        commands=tuple(
+            command.name
+            for command in spec.commands.values()
+            if command.type in {"script", "build"}
+        ),
+        dependencies=tuple(spec.dependencies),
+        skill_schema_version=spec.schema_version,
+        runtime_roots=spec.runtime_roots,
+        requirements=tuple(spec.requirements) if spec.requirements else None,
+        activation=activation,
+        requirers=tuple(requirers) if requirers else None,
+        substituted=substituted,
+    )
+
+
+def _installed_context_files(installed_dir: Path) -> tuple[str, ...]:
+    files: list[str] = []
+    for path in installed_dir.rglob("*"):
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError(f"installed content contains a link: {path}")
+        if stat.S_ISREG(info.st_mode):
+            relative = path.relative_to(installed_dir).as_posix()
+            if relative != ".csk-install.json":
+                files.append(relative)
+        elif not stat.S_ISDIR(info.st_mode):
+            raise ValueError(f"installed content contains a special entry: {path}")
+    return tuple(sorted(files))
+
+
 def _marker_payload(
     plan: SkillPlan,
     effective_locale: str | None,
@@ -4686,36 +4837,8 @@ def _marker_payload(
     builds: Mapping[str, install_marker.MarkerBuild] | None = None,
     build_source_identity: build_source.BuildSourceIdentity | None = None,
 ) -> dict[str, object]:
-    marker_activation: install_marker.MarkerActivation | None = None
-    if activation is not None:
-        activation_commands = activation.get("commands", [])
-        if not isinstance(activation_commands, list) or not all(
-            isinstance(command, str) for command in activation_commands
-        ):
-            raise InstallError("marker activation.commands must be a list of strings")
-        context = activation.get("context")
-        if not isinstance(context, bool):
-            raise InstallError("marker activation.context must be a boolean")
-        marker_activation = install_marker.MarkerActivation(
-            context=context,
-            commands=tuple(activation_commands),
-        )
-    marker_attestation: install_marker.MarkerAttestation | None = None
-    if attestation is not None:
-        registry = attestation.get("registry")
-        status = attestation.get("status")
-        key_id = attestation.get("key_id")
-        if (
-            not isinstance(registry, str)
-            or not isinstance(status, str)
-            or (key_id is not None and not isinstance(key_id, str))
-        ):
-            raise InstallError("marker attestation is invalid")
-        marker_attestation = install_marker.MarkerAttestation(
-            registry=registry,
-            status=status,
-            key_id=key_id,
-        )
+    marker_activation = _coerce_marker_activation(activation)
+    marker_attestation = _coerce_marker_attestation(attestation)
     common: dict[str, Any] = dict(
         name=plan.decl.name,
         source=plan.decl.source,
@@ -4760,20 +4883,7 @@ def _marker_payload(
         substituted=substituted,
     )
     if plan.spec.schema_version >= 7:
-        marker_builds: dict[str, install_marker.InstallMarkerBuildV3] = {}
-        for name, build in (builds or {}).items():
-            if isinstance(build, install_marker.InstallMarkerBuildV3):
-                marker_builds[name] = build
-            else:
-                marker_builds[name] = install_marker.InstallMarkerBuildV3(
-                    driver=build.driver,
-                    receipt_schema_version=1,
-                    execution_policy=build_metadata.PORTABLE_EXECUTION_POLICY,
-                    cache_key=build.cache_key,
-                    receipt_sha256=build.receipt_sha256,
-                    artifact_sha256=build.artifact_sha256,
-                    artifact_path=build.artifact_path,
-                )
+        marker_builds = _normalize_marker_builds_v3(builds)
         # Marker v3 records a schema-7 installation and marker v4 a schema-8
         # one. The two shapes are identical; only the manifest band differs.
         marker: install_marker.InstallMarker
@@ -4792,13 +4902,7 @@ def _marker_payload(
                 build_source=build_source_identity,
             )
     else:
-        local_builds = {
-            name: build
-            for name, build in (builds or {}).items()
-            if isinstance(build, install_marker.InstallMarkerBuild)
-        }
-        if len(local_builds) != len(builds or {}):
-            raise InstallError("external marker state requires skill schema 7 or newer")
+        local_builds = _normalize_marker_builds_v2(builds)
         marker = install_marker.InstallMarkerV2(
             **common,
             build_roots=plan.spec.build_roots,
@@ -4816,6 +4920,7 @@ def _marker_is_current(
     agents: list[str],
     *,
     activation: dict[str, object] | None = None,
+    requirers: list[str] | None = None,
     substituted: str | None = None,
     mcp_servers: dict[str, list[str]] | None = None,
     attestation: dict[str, object] | None = None,
@@ -4839,49 +4944,58 @@ def _marker_is_current(
         typed_marker = install_marker.parse_install_marker(marker)
     except install_marker.InstallMarkerError:
         return False
-    if not install_marker.marker_can_be_current(
+    if not isinstance(
         typed_marker,
-        skill_schema_version=plan.spec.schema_version,
+        (
+            install_marker.InstallMarkerV1,
+            install_marker.InstallMarkerV2,
+            install_marker.InstallMarkerV3,
+            install_marker.InstallMarkerV4,
+        ),
     ):
         return False
-    if marker.get("ref_kind") != plan.resolved.kind or marker.get("ref") != plan.resolved.ref:
+    try:
+        expected_activation = _coerce_marker_activation(activation)
+        expected_attestation = _coerce_marker_attestation(attestation)
+        expected_builds = _expected_marker_builds_json(
+            plan.spec.schema_version,
+            builds,
+        )
+    except (InstallError, install_marker.InstallMarkerError):
         return False
-    if marker.get("commit") != plan.resolved.commit:
-        return False
-    if marker.get("locale") != locale_value:
-        return False
-    if marker.get("agents") != sorted(set(agents)):
-        return False
-    expected_commands = sorted(
-        {
-            command.name
-            for command in plan.spec.commands.values()
-            if command.type in {"script", "build"}
-        }
+    expected_closure = _expected_legacy_marker_closure(
+        name=plan.decl.name,
+        decl=plan.decl,
+        resolved=plan.resolved,
+        spec=plan.spec,
+        locale_value=locale_value,
+        agents=agents,
+        activation=expected_activation,
+        requirers=requirers,
+        substituted=substituted,
     )
-    if marker.get("commands") != expected_commands:
+    if not install_marker.legacy_marker_matches_closure(
+        typed_marker,
+        expected_closure,
+    ):
         return False
-    if activation is not None:
-        activation_commands = activation.get("commands", [])
-        if not isinstance(activation_commands, list) or not all(
-            isinstance(command, str) for command in activation_commands
-        ):
-            return False
-        expected_activation = {**activation, "commands": sorted(set(activation_commands))}
-        if marker.get("activation") != expected_activation:
-            return False
-    if marker.get("substituted") != substituted:
+    expected_mcp: dict[str, tuple[str, ...]] | None = (
+        {
+            name: tuple(sorted(set(found)))
+            for name, found in sorted(mcp_servers.items())
+        }
+        if mcp_servers is not None
+        else None
+    )
+    actual_mcp = (
+        dict(typed_marker.mcp_servers)
+        if typed_marker.mcp_servers is not None
+        else None
+    )
+    if actual_mcp != expected_mcp:
         return False
-    if mcp_servers is not None:
-        expected_mcp = {name: sorted(set(found)) for name, found in sorted(mcp_servers.items())}
-        if marker.get("mcp_servers") != expected_mcp:
-            return False
-    if marker.get("attestation") != attestation:
+    if typed_marker.attestation != expected_attestation:
         return False
-    expected_builds = {
-        name: build.to_json()
-        for name, build in sorted((builds or {}).items())
-    }
     if isinstance(typed_marker, install_marker.InstallMarkerV1):
         if (
             plan.spec.build_roots
@@ -4890,26 +5004,25 @@ def _marker_is_current(
         ):
             return False
     else:
-        if marker.get("build_roots") != sorted(
-            set(plan.spec.build_roots)
-        ):
+        if typed_marker.build_roots != tuple(sorted(set(plan.spec.build_roots))):
             return False
-        if marker.get("builds") != expected_builds:
+        if {
+            name: build.to_json()
+            for name, build in typed_marker.builds.items()
+        } != expected_builds:
             return False
-        expected_source: dict[str, str] | None = None
-        if build_source_identity is not None:
-            expected_source = {
-                "algorithm": build_source_identity.algorithm,
-                "content_sha256": (
-                    build_source_identity.content_sha256
-                ),
-            }
-        if marker.get("build_source") != expected_source:
+        if typed_marker.build_source != build_source_identity:
             return False
     if _installed_context_exposes_build_roots(marker, target, plan.spec.build_roots):
         return False
     actual_hash = hashing.content_sha256(target)
-    return marker.get("content_sha256") == actual_hash
+    if typed_marker.content_sha256 != actual_hash:
+        return False
+    try:
+        actual_files = _installed_context_files(target)
+    except (OSError, ValueError):
+        return False
+    return typed_marker.files == actual_files
 
 
 def _installed_context_exposes_build_roots(

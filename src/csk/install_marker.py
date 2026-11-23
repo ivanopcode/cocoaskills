@@ -1156,6 +1156,12 @@ class InstallMarkerV5:
 
 
 MarkerBuild: TypeAlias = InstallMarkerBuild | InstallMarkerBuildV3 | InstallMarkerBuildV5
+LegacyInstallMarker: TypeAlias = (
+    InstallMarkerV1
+    | InstallMarkerV2
+    | InstallMarkerV3
+    | InstallMarkerV4
+)
 InstallMarker: TypeAlias = (
     InstallMarkerV1
     | InstallMarkerV2
@@ -1163,6 +1169,93 @@ InstallMarker: TypeAlias = (
     | InstallMarkerV4
     | InstallMarkerV5
 )
+
+
+@dataclass(frozen=True, kw_only=True)
+class LegacyMarkerClosure:
+    """Closure-derived expectations for one legacy (v1-v4) install marker.
+
+    Shared by ``status._inspect_node_marker`` and
+    ``installer._marker_is_current`` so the installer's up-to-date decision
+    and status's closure check use one definition and cannot drift. Every
+    member is listed in ``LEGACY_MARKER_CLOSURE_FIELDS``, which drives
+    ``compare_legacy_marker_closure`` directly.
+    """
+
+    name: str
+    source: str
+    ref_kind: str
+    ref: str
+    commit: str
+    git: str | None
+    locale: str | None
+    agents: tuple[str, ...]
+    commands: tuple[str, ...]
+    dependencies: tuple[str, ...]
+    skill_schema_version: int
+    runtime_roots: tuple[str, ...]
+    requirements: tuple[str, ...] | None
+    activation: MarkerActivation | None
+    requirers: tuple[str, ...] | None
+    substituted: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "agents", tuple(sorted(set(self.agents))))
+        object.__setattr__(self, "commands", tuple(sorted(set(self.commands))))
+        object.__setattr__(
+            self, "dependencies", tuple(sorted(set(self.dependencies)))
+        )
+        object.__setattr__(
+            self, "runtime_roots", tuple(sorted(set(self.runtime_roots)))
+        )
+        if self.requirements is not None:
+            normalized_requirements = tuple(sorted(set(self.requirements)))
+            object.__setattr__(
+                self, "requirements", normalized_requirements or None
+            )
+        if self.requirers is not None:
+            normalized_requirers = tuple(sorted(set(self.requirers)))
+            object.__setattr__(
+                self, "requirers", normalized_requirers or None
+            )
+
+
+LEGACY_MARKER_CLOSURE_FIELDS: Final[tuple[str, ...]] = tuple(
+    member.name for member in dataclass_fields(LegacyMarkerClosure)
+)
+
+
+def compare_legacy_marker_closure(
+    marker: LegacyInstallMarker,
+    expected: LegacyMarkerClosure,
+) -> tuple[str, ...]:
+    """Compare one legacy (v1-v4) marker against its closure expectations.
+
+    Returns the differing field names from ``LEGACY_MARKER_CLOSURE_FIELDS``
+    in declaration order; an empty tuple means the marker matches the
+    current closure on schema compatibility and every closure field.
+    """
+
+    differing: list[str] = []
+    for field_name in LEGACY_MARKER_CLOSURE_FIELDS:
+        if field_name == "skill_schema_version":
+            if not marker_can_be_current(
+                marker,
+                skill_schema_version=expected.skill_schema_version,
+            ):
+                differing.append(field_name)
+        elif getattr(marker, field_name) != getattr(expected, field_name):
+            differing.append(field_name)
+    return tuple(differing)
+
+
+def legacy_marker_matches_closure(
+    marker: LegacyInstallMarker,
+    expected: LegacyMarkerClosure,
+) -> bool:
+    """Return whether a legacy marker matches every closure expectation."""
+
+    return not compare_legacy_marker_closure(marker, expected)
 
 
 def serialize_install_marker(payload: Mapping[str, Any]) -> bytes:
@@ -2484,6 +2577,7 @@ __all__ = [
     "INSTALL_MARKER_V3_SCHEMA_VERSION",
     "INSTALL_MARKER_V4_SCHEMA_VERSION",
     "INSTALL_MARKER_V5_SCHEMA_VERSION",
+    "LEGACY_MARKER_CLOSURE_FIELDS",
     "MARKER_PLAN_COMPARISON_FIELDS",
     "SUPPORTED_INSTALL_MARKER_SCHEMA_VERSIONS",
     "AttestationExpectation",
@@ -2497,6 +2591,8 @@ __all__ = [
     "InstallMarkerV3",
     "InstallMarkerV4",
     "InstallMarkerV5",
+    "LegacyInstallMarker",
+    "LegacyMarkerClosure",
     "MarkerAttestation",
     "MarkerPlan",
     "MarkerRepositoryCommit",
@@ -2511,9 +2607,11 @@ __all__ = [
     "check_external_only_build_state",
     "check_local_registry_requirement",
     "check_top_level_build_source",
+    "compare_legacy_marker_closure",
     "compare_marker_plan",
     "evaluate_marker_status",
     "evaluate_schema2_status",
+    "legacy_marker_matches_closure",
     "marker_can_be_current",
     "marker_plan_is_current",
     "parse_install_marker",

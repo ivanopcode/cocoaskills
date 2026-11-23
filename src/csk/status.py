@@ -4,7 +4,6 @@ from . import protocol_json
 from .terminal import terminal_text
 
 import json
-import stat
 from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
@@ -699,39 +698,23 @@ def _inspect_node_marker(
             )
         ),
     )
-    expected_commands = tuple(
-        sorted(
-            command.name
-            for command in node.spec.commands.values()
-            if command.type in {"script", "build"}
-        )
+    expected_closure = installer._expected_legacy_marker_closure(
+        name=node.name,
+        decl=node.decl,
+        resolved=node.resolved,
+        spec=node.spec,
+        locale_value=effective_locale,
+        agents=agents,
+        activation=expected_activation,
+        requirers=node.consumers(),
+        substituted=node.substituted,
     )
-    expected_requirements = (
-        tuple(sorted(node.spec.requirements))
-        if node.spec.requirements
-        else None
-    )
-    expected_requirers = tuple(sorted(node.consumers())) or None
     common_current = (
         legacy_marker is not None
-        and install_marker.marker_can_be_current(
+        and install_marker.legacy_marker_matches_closure(
             legacy_marker,
-            skill_schema_version=node.spec.schema_version,
+            expected_closure,
         )
-        and legacy_marker.name == node.name
-        and legacy_marker.source == node.decl.source
-        and legacy_marker.ref_kind == node.resolved.kind
-        and legacy_marker.ref == node.resolved.ref
-        and legacy_marker.git == node.decl.git
-        and legacy_marker.locale == effective_locale
-        and legacy_marker.agents == tuple(sorted(set(agents)))
-        and legacy_marker.commands == expected_commands
-        and legacy_marker.dependencies == tuple(sorted(node.spec.dependencies))
-        and legacy_marker.runtime_roots == tuple(sorted(node.spec.runtime_roots))
-        and legacy_marker.requirements == expected_requirements
-        and legacy_marker.activation == expected_activation
-        and legacy_marker.requirers == expected_requirers
-        and legacy_marker.substituted == node.substituted
     )
     if not common_current:
         return _MarkerInspection(
@@ -1040,18 +1023,7 @@ def _classify_external_build(
 
 
 def _installed_files(installed_dir: Path) -> tuple[str, ...]:
-    files: list[str] = []
-    for path in installed_dir.rglob("*"):
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            raise ValueError(f"installed content contains a link: {path}")
-        if stat.S_ISREG(info.st_mode):
-            relative = path.relative_to(installed_dir).as_posix()
-            if relative != ".csk-install.json":
-                files.append(relative)
-        elif not stat.S_ISDIR(info.st_mode):
-            raise ValueError(f"installed content contains a special entry: {path}")
-    return tuple(sorted(files))
+    return installer._installed_context_files(installed_dir)
 
 
 def _runtime_exposes_build_roots(
