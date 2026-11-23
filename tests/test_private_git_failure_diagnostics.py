@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from conftest import make_config, make_project, write_skillfile
-from test_git_admission_ssh import _private_paths, _tool
+from test_git_admission_ssh import _tool
 from test_install import _stub_trusted_toolchain
 from test_install_external_repository import (
     _external_repository,
@@ -21,7 +21,7 @@ from test_source_diagnostics import _attempt
 from csk import cli, git_admission, installer, locking
 from csk.build_repository import LockedCommit
 from csk.build_ssh import BuildSSHRule
-from csk.sources import _selection_fs, diagnostics, transport
+from csk.sources import _selection_fs, diagnostics, errors as source_errors, transport
 
 
 def _require_selection() -> None:
@@ -230,14 +230,28 @@ def test_subprocess_private_git_failure_names_repository_and_hides_raw_stderr(
     terminal_stderr: str,
     expected_class: str,
 ) -> None:
-    # Subprocess private Git failures name the canonical repository identity and fixed hints while keeping raw child stderr hidden.
+    # Subprocess private Git failures through acquire_network and resolve_network_ref attach the canonical repository identity and fixed hints while keeping raw child stderr hidden.
     raw_output = (
         'RAW_STDERR_CANARY_TOKEN\n'
         'sign_and_send_pubkey: signing failed for ED25519 "PRIVATE_KEY_CANARY" from agent: refused\n'
         + terminal_stderr
     ).encode("utf-8")
-    tool = _tool(tmp_path / "ssh", git_admission.OperatorSSHCredentials())
-    paths = _private_paths(tmp_path / "private")
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text("", encoding="utf-8")
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("placeholder", encoding="utf-8")
+    tool = _tool(
+        fake_ssh,
+        git_admission.OperatorSSHCredentials(identity=str(key_file)),
+    )
+    source = git_admission.RepositorySource(
+        git="ssh://git@example.org/team/kit.git",
+        identity="example.org/team/kit",
+        transport="ssh",
+    )
+    monkeypatch.setattr(git_admission, "validate_git_tool", lambda *_a, **_kw: None)
+    monkeypatch.setattr(git_admission, "_preflight_ssh", lambda *_a, **_kw: None)
+    monkeypatch.setattr(git_admission, "_materialize_ssh_wrapper", lambda *_a, **_kw: ("ssh",))
     monkeypatch.setattr(git_admission, "_operation_trust_environment", lambda *_a: {})
     monkeypatch.setattr(git_admission.git_trust, "pinned_command", lambda argv, _env: argv)
 
@@ -248,22 +262,19 @@ def test_subprocess_private_git_failure_names_repository_and_hides_raw_stderr(
 
     with pytest.raises(git_admission.GitAdmissionError) as caught:
         if operation == "ls-remote":
-            git_admission._run_git_ls_remote(
+            git_admission.resolve_network_ref(
+                source,
+                "tag",
+                "v1.0.0",
                 tool,
-                paths,
-                {},
-                ("ls-remote",),
                 limits=git_admission.Limits(),
-                repository="example.org/team/kit",
             )
         else:
-            git_admission._run_git(
+            git_admission.acquire_network(
+                source,
+                LockedCommit("sha1", "1" * 40),
                 tool,
-                paths,
-                {},
-                "fetch",
                 limits=git_admission.Limits(),
-                repository="example.org/team/kit",
             )
 
     rendered = installer.failure_text(caught.value, verbose=True)
@@ -312,8 +323,8 @@ def test_credential_bearing_url_redacts_secret_while_keeping_canonical_identity(
     secrets: tuple[str, ...],
     redactable_in_free_text: bool,
 ) -> None:
-    # Negative + positive control: credential-bearing URLs render without userinfo or query tokens while still naming the canonical repository identity.
-    # 1) TransportResolutionError (ssh-auth-rejected) path drops every URL userinfo/query form structurally.
+    # Negative + positive control: credential-bearing URLs (which plan-time parsing already rejects in production) never leak userinfo or query tokens in rendered diagnostics while still naming the canonical repository identity; bare-token scp strings without ':' are not matched by free-text redaction, so production relies on never echoing the raw endpoint URL.
+    # 1) TransportResolutionError (ssh-auth-rejected) path refuses unparseable credentialed URLs and falls back to the validated canonical identity.
     resolution_error = transport.TransportResolutionError(
         (_attempt(1, "ssh-auth-rejected", credentialed_url),),
         identity="example.org/team/kit",
@@ -359,6 +370,71 @@ def test_credential_bearing_url_redacts_secret_while_keeping_canonical_identity(
     assert "unclassified" in rendered_unclassified, rendered_unclassified
     assert "csk config build-ssh doctor" in rendered_unclassified, rendered_unclassified
     assert "csk config build-https" in rendered_unclassified, rendered_unclassified
+
+
+@pytest.mark.parametrize(
+    "failure_class",
+    ["ssh-auth-rejected", "auth-unavailable", "unclassified"],
+)
+def test_locked_recovery_transport_cause_renders_repository_and_next_lines(
+    failure_class: str,
+) -> None:
+    # Locked-snapshot recovery failures wrapped in source_snapshot_unavailable render canonical repository identity plus class/next/hint lines from _transport_cause_next_lines, with a non-transport cause as negative control.
+    git_cause = git_admission.GitAdmissionError(
+        git_admission.SOURCE_UNAVAILABLE,
+        "trusted Git admission failed for example.org/team/kit",
+        failure_class=failure_class,
+        hints=("ssh-signing-failed",),
+        repository="example.org/team/kit",
+    )
+    wrapped_git = source_errors.SourceError(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        f"Skill 'demo' locked commit {'1' * 40} from Git source 'example.org/team/kit' is unavailable: {git_cause}",
+    )
+    wrapped_git.__cause__ = git_cause
+
+    rendered_git = installer._schema2_failure_text(wrapped_git)
+    assert "source_snapshot_unavailable:" in rendered_git, rendered_git
+    assert "example.org/team/kit" in rendered_git, rendered_git
+    assert f"failure class: {failure_class}" in rendered_git, rendered_git
+    assert "next:" in rendered_git, rendered_git
+    assert "csk config build-ssh doctor" in rendered_git, rendered_git
+    assert "csk config build-https" in rendered_git, rendered_git
+    assert "hint: SSH reported a signing failure" in rendered_git, rendered_git
+
+    resolution_cause = transport.TransportResolutionError(
+        (
+            replace(
+                _attempt(1, failure_class, "ssh://git@example.org/team/kit.git"),
+                hints=("ssh-signing-failed",),
+            ),
+        ),
+        identity="example.org/team/kit",
+    )
+    wrapped_resolution = source_errors.SourceError(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        f"Skill 'demo' locked commit {'1' * 40} from Git source 'example.org/team/kit' is unavailable: {resolution_cause}",
+    )
+    wrapped_resolution.__cause__ = resolution_cause
+
+    rendered_resolution = installer._schema2_failure_text(wrapped_resolution)
+    assert "source_snapshot_unavailable:" in rendered_resolution, rendered_resolution
+    assert "example.org/team/kit" in rendered_resolution, rendered_resolution
+    assert "next: attempt 1:" in rendered_resolution, rendered_resolution
+    assert "csk config build-ssh doctor" in rendered_resolution, rendered_resolution
+    assert "csk config build-https" in rendered_resolution, rendered_resolution
+    assert "hint: attempt 1: SSH reported a signing failure" in rendered_resolution, rendered_resolution
+
+    # Negative control: non-transport causes emit no transport next lines.
+    wrapped_plain = source_errors.SourceError(
+        source_errors.CODE_SNAPSHOT_UNAVAILABLE,
+        "Skill 'demo' locked snapshot is unavailable: missing directory",
+    )
+    wrapped_plain.__cause__ = ValueError("missing directory")
+    rendered_plain = installer._schema2_failure_text(wrapped_plain)
+    assert installer._transport_cause_next_lines(ValueError("missing directory")) == []
+    assert "next:" not in rendered_plain
+    assert "csk config build-ssh doctor" not in rendered_plain
 
 
 @pytest.mark.parametrize(
