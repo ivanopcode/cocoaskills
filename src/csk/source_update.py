@@ -446,6 +446,7 @@ class CanonicalUrlReport:
     # Readable closure roots scanned: registered schema-1 projects and the
     # global Skillfile.
     roots: int = 0
+    invalid: list[str] = field(default_factory=list)
 
 
 def canonical_url_report(config: GlobalConfig, *, root: str | None) -> CanonicalUrlReport:
@@ -458,15 +459,27 @@ def canonical_url_report(config: GlobalConfig, *, root: str | None) -> Canonical
     scan = scan_registry(config, lenient=True)
     index = scan.index()
     scoped: dict[str, list[str]] = {}
+    invalid: list[str] = []
     for decl in scan.declarations:
-        spelling = decl.spelling()
-        if spelling is not None and (root is None or decl.root == root):
-            places = scoped.setdefault(spelling, [])
-            if decl.place not in places:
-                places.append(decl.place)
+        if decl.git is None or not decl.at_declared_ref:
+            continue
+        if root is not None and decl.root != root:
+            continue
+        try:
+            spelling = git_ops.declared_fetch_url(decl.git, decl.base)
+        except git_ops.GitError as exc:
+            invalid_message = f"invalid URL {git_ops.display_url(decl.git)!r} in {decl.place}: {exc}"
+            if invalid_message not in invalid:
+                invalid.append(invalid_message)
+            continue
+        places = scoped.setdefault(spelling, [])
+        if decl.place not in places:
+            places.append(decl.place)
     identities = sorted({
         identity for spelling in scoped if (identity := canonical_urls.repository_identity(spelling)) is not None
     })
     conflicts = [message for identity in identities if (message := index.conflict(identity)) is not None]
     not_checked = sorted({text for owner, text in scan.not_checked if root is None or owner == root})
-    return CanonicalUrlReport(scoped, len(identities), conflicts, list(scan.unreadable), not_checked, scan.roots)
+    return CanonicalUrlReport(
+        scoped, len(identities), conflicts, list(scan.unreadable), not_checked, scan.roots, invalid,
+    )

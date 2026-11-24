@@ -209,8 +209,10 @@ def declared_fetch_url(url: str, base: Path | None = None) -> str:
         identity = canonical_source_identity(url)
     except SourceIdentityError as exc:
         raise GitError(f"Invalid declared Git source: {exc}") from exc
-    if identity is None and not url.lower().startswith("file:"):
-        return str(_local_source_path(url, base if base is not None else Path.cwd()))
+    if identity is None:
+        local_path = _local_source_path(url, base if base is not None else Path.cwd())
+        if not url.lower().startswith("file:"):
+            return str(local_path)
     return url
 
 
@@ -650,8 +652,8 @@ def _refused_redirect(
 def probe_declared_url(url: str) -> RedirectProbe:
     """Check whether a declared HTTP(S) URL answers with a redirect.
 
-    Used by ``csk check --canonical-urls --network``: one discovery request
-    per URL (two HTTP requests when ``~/.netrc`` answers an authentication
+    Used by ``csk check --canonical-urls --network`` and ``csk skill check --network``:
+    one discovery request per URL (two HTTP requests when ``~/.netrc`` answers an authentication
     challenge), under the same trust pins as a fetch, with redirects refused
     and no credential helper, prompt, extra header or cookie (see
     :func:`_discovery_without_credentials`). A server that requires

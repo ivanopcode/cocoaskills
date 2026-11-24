@@ -658,17 +658,30 @@ def _add_skill(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
             "  <skill>/locales/metadata.json, <skill>/.skill_triggers.\n\n"
             "Notes:\n"
             "  This command reads the working tree as-is. csk install validates the committed\n"
-            "  git snapshot resolved from Skillfile.json.\n\n"
+            "  git snapshot resolved from Skillfile.json.\n"
+            "  Offline checks validate declared dependency and build repository URLs and\n"
+            "  spelling consistency within the manifest. --network adds one discovery request\n"
+            "  per declared HTTP(S) URL (two HTTP requests if ~/.netrc answers a challenge)\n"
+            "  and reports redirects as errors and unverified URLs as warnings.\n\n"
             "Exit codes:\n"
             "  0 no errors, 1 one or more strict errors.\n\n"
             "Examples:\n"
             "  csk skill check .\n"
+            "  csk skill check --network .\n"
             "  csk skill check /path/to/skill --locale ru\n"
             "  csk skill check . --json"
         ),
     )
     check.add_argument("path", help="skill directory to validate")
     check.add_argument("--locale", help="selected locale to validate")
+    check.add_argument(
+        "--network",
+        action="store_true",
+        help=(
+            "probe declared HTTP(S) dependency URLs for redirects "
+            "(one discovery request per URL without credential helpers, prompts, extra headers or cookies)"
+        ),
+    )
     check.add_argument("--json", action="store_true", dest="json_output", help="print machine-readable issues")
 
 
@@ -1760,7 +1773,11 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
     if not skill_dir.is_absolute():
         skill_dir = Path.cwd() / skill_dir
     skill_dir = skill_dir.resolve()
-    issues = skillcheck.validate_skill(skill_dir, locale_value=args.locale)
+    issues = skillcheck.validate_skill(
+        skill_dir,
+        locale_value=args.locale,
+        network=bool(getattr(args, "network", False)),
+    )
     if args.json_output:
         print(json.dumps([skillcheck.issue_to_dict(issue) for issue in issues], ensure_ascii=False, indent=2))
     else:
@@ -1768,6 +1785,11 @@ def _cmd_skill_check(args: argparse.Namespace) -> int:
             print(f"{terminal_text(skill_dir)}: ok")
         for issue in issues:
             print(skillcheck.format_issue(issue))
+        if not getattr(args, "network", False) and skillcheck.has_http_repository_urls(skill_dir):
+            print(
+                "note: HTTP(S) dependency URLs were not probed for redirects; "
+                "run 'csk skill check --network' to verify them against their servers"
+            )
     return EXIT_PARTIAL_FAIL if skillcheck.has_errors(issues) else EXIT_OK
 
 
@@ -1950,6 +1972,9 @@ def _cmd_check_canonical_urls(cfg: config.GlobalConfig, args: argparse.Namespace
     for text in report.unreadable:
         failed = True
         print(f"error: cannot read declarations: {terminal_text(text)}", file=sys.stderr)
+    for text in report.invalid:
+        failed = True
+        print(f"error: {terminal_text(text)}", file=sys.stderr)
     for message in report.conflicts:
         failed = True
         print(f"error: {terminal_text(message)}", file=sys.stderr)

@@ -1035,10 +1035,14 @@ def validate_member_package(
             preloaded=True,
         ),
     )
+    # Requirement source URL validation defers to closure validation at
+    # publication (see _check_requirement_conflicts below).
     issues = _run_member_reader(
         label,
         member_path,
-        lambda: skillcheck.validate_skill(snapshot_path, locale_value=None),
+        lambda: skillcheck.validate_skill(
+            snapshot_path, locale_value=None, check_dependency_urls=False
+        ),
     )
     errors = [issue for issue in issues if issue.severity == "error"]
     if errors:

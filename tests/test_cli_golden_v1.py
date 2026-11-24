@@ -142,6 +142,43 @@ def test_cli_v1_golden_byte_identical(
             terminal_width=released.terminal_width,
         )
 
+    if slug == "skill-check-help":
+        # Only the --network option, its Notes paragraph and its example differ;
+        # every surrounding released help byte stays under exact comparison.
+        old_usage = b"[--locale LOCALE] [--json] path"
+        new_usage = b"[--locale LOCALE] [--network] [--json] path"
+        old_option = b"  --json           print machine-readable issues\n"
+        new_option = (
+            b"  --network        probe declared HTTP(S) dependency URLs for redirects (one\n"
+            b"                   discovery request per URL without credential helpers,\n"
+            b"                   prompts, extra headers or cookies)\n"
+            b"  --json           print machine-readable issues\n"
+        )
+        old_notes = b"  git snapshot resolved from Skillfile.json.\n"
+        new_notes = (
+            b"  git snapshot resolved from Skillfile.json.\n"
+            b"  Offline checks validate declared dependency and build repository URLs and\n"
+            b"  spelling consistency within the manifest. --network adds one discovery request\n"
+            b"  per declared HTTP(S) URL (two HTTP requests if ~/.netrc answers a challenge)\n"
+            b"  and reports redirects as errors and unverified URLs as warnings.\n"
+        )
+        old_example = b"  csk skill check .\n"
+        new_example = b"  csk skill check .\n  csk skill check --network .\n"
+        for marker in (old_usage, old_option, old_notes, old_example):
+            assert released.stdout.count(marker) == 1
+        released = CLIOutput(
+            exit_code=released.exit_code,
+            stdout=(
+                released.stdout.replace(old_usage, new_usage)
+                .replace(old_option, new_option)
+                .replace(old_notes, new_notes)
+                .replace(old_example, new_example)
+            ),
+            stderr=released.stderr,
+            version=released.version,
+            terminal_width=released.terminal_width,
+        )
+
     if slug == "audit-help":
         # Keep every other help byte under the released comparison. The
         # token option is the one intentional security-related difference.
@@ -299,6 +336,24 @@ def test_audit_help_comparison_rejects_unrelated_drift(tmp_path, released_v1_sou
     with pytest.raises(AssertionError):
         test_cli_v1_golden_byte_identical(
             "audit-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
+        )
+
+
+# The narrow skill-check-help exception must still detect an unrelated changed option.
+def test_skill_check_help_comparison_rejects_unrelated_drift(
+    tmp_path, released_v1_source, monkeypatch,
+) -> None:
+    mutant_root = tmp_path / "mutant-project"
+    shutil.copytree(PROJECT_ROOT / "src", mutant_root / "src")
+    source = mutant_root / "src" / "csk" / "cli.py"
+    text = source.read_text(encoding="utf-8")
+    before = 'help="selected locale to validate"'
+    assert text.count(before) == 1
+    source.write_text(text.replace(before, 'help="different locale help"'), encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "PROJECT_ROOT", mutant_root)
+    with pytest.raises(AssertionError):
+        test_cli_v1_golden_byte_identical(
+            "skill-check-help", _audit_help_fixture(tmp_path), released_v1_source, tmp_path,
         )
 
 

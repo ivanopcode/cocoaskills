@@ -4,8 +4,9 @@ from .terminal import terminal_text
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from . import locale, skillspec, whitelist
+from . import canonical_urls, git_ops, locale, skillspec, whitelist
 
 
 @dataclass(frozen=True)
@@ -16,7 +17,13 @@ class ValidationIssue:
     message: str
 
 
-def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[ValidationIssue]:
+def validate_skill(
+    skill_dir: Path,
+    *,
+    locale_value: str | None = None,
+    network: bool = False,
+    check_dependency_urls: bool = True,
+) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     spec: skillspec.SkillSpec | None = None
     if not (skill_dir / "SKILL.md").is_file():
@@ -52,6 +59,8 @@ def validate_skill(skill_dir: Path, *, locale_value: str | None = None) -> list[
                     rejection,
                 )
             )
+        if check_dependency_urls or network:
+            issues.extend(_dependency_url_issues(skill_dir, spec, network=network))
         issues.extend(_runtime_root_reference_warnings(skill_dir, spec))
         issues.extend(_command_resolution_warnings(skill_dir, spec))
 
@@ -91,8 +100,114 @@ def format_issue(issue: ValidationIssue) -> str:
     return f"{terminal_text(issue.severity)}: {terminal_text(issue.code)}{terminal_text(location)}: {terminal_text(issue.message)}"
 
 
+def has_http_repository_urls(skill_dir: Path) -> bool:
+    """Return whether the skill manifest declares any valid HTTP(S) repository URL."""
+    try:
+        spec = skillspec.load_skill_spec(skill_dir)
+    except skillspec.SkillSpecError:
+        return False
+    for _, raw_url in _declared_repository_urls(spec):
+        try:
+            spelling = git_ops.declared_fetch_url(raw_url, skill_dir)
+        except git_ops.GitError:
+            continue
+        if urlsplit(spelling).scheme.lower() in {"http", "https"}:
+            return True
+    return False
+
+
 def _skill_spec_path(skill_dir: Path) -> str:
     return skillspec.manifest_source_path(skill_dir)
+
+
+def _declared_repository_urls(spec: skillspec.SkillSpec) -> list[tuple[str, str]]:
+    urls: list[tuple[str, str]] = [
+        (f"dependencies.skills.{name}.git", spec.requirements[name].git)
+        for name in sorted(spec.requirements)
+    ]
+    urls.extend(
+        (f"build_repositories.{name}.git", spec.build_repositories[name].git)
+        for name in sorted(spec.build_repositories)
+    )
+    return urls
+
+
+def _dependency_url_issues(
+    skill_dir: Path,
+    spec: skillspec.SkillSpec,
+    *,
+    network: bool,
+) -> list[ValidationIssue]:
+    declared = _declared_repository_urls(spec)
+    if not declared:
+        return []
+    manifest_path = _skill_spec_path(skill_dir)
+    issues: list[ValidationIssue] = []
+    index = canonical_urls.SpellingIndex()
+    http_fields: dict[str, list[str]] = {}
+    for field, raw_url in declared:
+        try:
+            spelling = git_ops.declared_fetch_url(raw_url, skill_dir)
+        except git_ops.GitError as exc:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "skill.dependency_url_invalid",
+                    manifest_path,
+                    f"{field}: {git_ops.display_url(raw_url)!r}: {exc}",
+                )
+            )
+            continue
+        index.add(spelling, f"{manifest_path} ({field})")
+        if urlsplit(spelling).scheme.lower() in {"http", "https"}:
+            http_fields.setdefault(spelling, []).append(field)
+    for _identity, message in index.conflicts():
+        issues.append(
+            ValidationIssue(
+                "error",
+                "skill.dependency_url_conflict",
+                manifest_path,
+                message,
+            )
+        )
+    if not network:
+        return issues
+    for spelling in sorted(http_fields):
+        fields_label = ", ".join(http_fields[spelling])
+        shown = git_ops.display_url(spelling)
+        try:
+            probe = git_ops.probe_declared_url(spelling)
+        except git_ops.GitError as exc:
+            if exc.code is not None:
+                raise
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "skill.dependency_url_unverified",
+                    manifest_path,
+                    f"{fields_label}: not verified {shown!r}: {exc}",
+                )
+            )
+            continue
+        if probe.outcome == "redirect":
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "skill.dependency_url_redirect",
+                    manifest_path,
+                    f"{fields_label}: {git_ops.redirect_refusal(spelling, probe.canonical)}",
+                )
+            )
+        elif probe.outcome == "unverified":
+            issues.append(
+                ValidationIssue(
+                    "warning",
+                    "skill.dependency_url_unverified",
+                    manifest_path,
+                    f"{fields_label}: not verified {shown!r}: {probe.detail or 'unknown failure'}",
+                )
+            )
+    return issues
 
 
 def _runtime_root_reference_warnings(
