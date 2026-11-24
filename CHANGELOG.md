@@ -50,10 +50,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field, and continues instead of refusing or falling back to a lossy rebuild;
   `csk skill check --locale <locale>` reports the same condition as a warning
   issue for skill authors.
-- Refuse symlinked or non-directory managed bin, skills, runtime, and adapter
-  directories during shim cleanup, shim writes, adapter refresh, user-bin
-  publishing, and project/global installs so foreign files in a linked target
-  directory are never deleted or overwritten.
 - Refuse symlinked or non-directory csk-owned managed directories (`.agents`,
   `.agents/bin`, `.agents/skills`, `global`, `global/bin`, `global/skills`,
   `hybrid`, `hybrid/skills`, and `runtime`) during shim cleanup, shim writes,

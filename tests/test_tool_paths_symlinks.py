@@ -212,14 +212,16 @@ def test_resolver_refuses_chained_directory_alias(tmp_path, monkeypatch, locatio
     root.rmdir()
     _link(root, external, directory=True)
     if location == "published":
-        (root / ".csk-managed.json").write_text("{}", encoding="utf-8")
+        (external / ".csk-managed.json").write_text("{}", encoding="utf-8")
     target = _regular_tool(tmp_path / "runtime" / "tool")
     # Force the POSIX writer on every host: directory alias resolution is
     # cross-platform even when native command launchers are .cmd files.
-    shim = shims.write_bin_shim(root, "git", target, platform_name="unix")
+    # Plant the fixture shim directly in the real link target directory because
+    # write_bin_shim itself refuses symlinked managed bin directories.
+    shim = shims.write_bin_shim(external, "git", target, platform_name="unix")
     name = "git.exe" if os.name == "nt" else "git"
     if name != shim.name:
-        shim.rename(root / name)
+        shim.rename(external / name)
     _link(tmp_path / "alias", root, directory=True)
     with pytest.raises(FileNotFoundError):
         resolve_tool("git", search_path=str(tmp_path / "alias"))
