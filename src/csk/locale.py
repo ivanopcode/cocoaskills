@@ -235,7 +235,7 @@ def render_locale(
             raise LocaleError(f"Cannot localize missing SKILL.md: {skill_path}")
         try:
             rendered_skill = _render_skill_frontmatter(
-                _read_utf8_exact(skill_path),
+                _read_utf8_exact(skill_path, path_label=str(skill_path)),
                 description.strip(),
                 triggers,
                 path_label=str(skill_path),
@@ -263,7 +263,7 @@ def render_locale(
     ):
         try:
             rendered_openai = _render_openai_yaml(
-                _read_utf8_exact(openai_path),
+                _read_utf8_exact(openai_path, path_label=str(openai_path)),
                 openai_fields,
                 path_label=str(openai_path),
             )
@@ -300,7 +300,7 @@ def _validate_render_targets(
     if validate_skill_frontmatter and skill_path.is_file():
         try:
             _parse_skill_frontmatter(
-                _read_utf8_exact(skill_path),
+                _read_utf8_exact(skill_path, path_label="SKILL.md"),
                 path_label="SKILL.md",
             )
         except LocaleError as exc:
@@ -323,7 +323,7 @@ def _validate_render_targets(
     ):
         try:
             _render_openai_yaml(
-                _read_utf8_exact(openai_path),
+                _read_utf8_exact(openai_path, path_label="agents/openai.yaml"),
                 openai_fields,
                 path_label="agents/openai.yaml",
             )
@@ -341,8 +341,14 @@ def _validate_render_targets(
     return issues
 
 
-def _read_utf8_exact(path: Path) -> str:
-    return path.read_bytes().decode("utf-8")
+def _read_utf8_exact(path: Path, *, path_label: str | None = None) -> str:
+    try:
+        return path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError as exc:
+        label = path_label or str(path)
+        raise LocaleError(
+            f"Cannot localize {label}: file is not valid UTF-8 ({exc})"
+        ) from exc
 
 
 def _write_utf8_exact(path: Path, text: str) -> None:

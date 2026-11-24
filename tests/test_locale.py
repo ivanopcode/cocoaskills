@@ -651,3 +651,103 @@ def test_public_install_preserves_frontmatter_and_warns_without_refusing_unsuppo
     assert (
         project_no_desc / ".agents" / "skills" / "skill-no-desc" / "agents" / "openai.yaml"
     ).read_bytes() == 'interface:\n  display_name: "Имя"\n'.encode("utf-8")
+
+
+def test_non_utf8_skill_md_and_openai_yaml_warn_and_preserve_raw_bytes(
+    tmp_path, skills_root, csk_home
+):
+    # Non-UTF-8 bytes in agents/openai.yaml or SKILL.md emit warnings in skillcheck and render_locale without raising UnicodeDecodeError, leaving raw bytes untouched while still localizing valid companion files.
+    from conftest import make_config, make_project, make_skill_repo, write_skillfile
+    from csk import installer, skillcheck
+
+    # Case 1: valid SKILL.md with non-UTF-8 agents/openai.yaml (e.g. Latin-1 "Café").
+    snap1 = tmp_path / "snap-nonutf8-openai"
+    inst1 = tmp_path / "inst-nonutf8-openai"
+    (snap1 / "locales").mkdir(parents=True)
+    (snap1 / ".skill_triggers").mkdir()
+    (snap1 / "agents").mkdir()
+    (inst1 / "agents").mkdir(parents=True)
+    raw_openai = b"interface:\n  display_name: Caf\xe9\n"
+    raw_skill = b"---\nname: skill-latin1\ndescription: Source\n---\nbody\n"
+    (snap1 / "SKILL.md").write_bytes(raw_skill)
+    (inst1 / "SKILL.md").write_bytes(raw_skill)
+    (snap1 / "agents" / "openai.yaml").write_bytes(raw_openai)
+    (inst1 / "agents" / "openai.yaml").write_bytes(raw_openai)
+    (snap1 / "locales" / "metadata.json").write_text(
+        json.dumps({"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}),
+        encoding="utf-8",
+    )
+    (snap1 / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
+
+    check1 = skillcheck.validate_skill(snap1, locale_value="ru")
+    assert not skillcheck.has_errors(check1)
+    assert [(i.severity, i.code, i.path) for i in check1] == [
+        ("warning", "locale.openai_yaml_invalid", "agents/openai.yaml"),
+    ]
+    issues1 = locale.render_locale(snap1, inst1, "ru")
+    assert any(i.code == "locale.openai_yaml_invalid" and i.severity == "warning" for i in issues1)
+    assert (inst1 / "agents" / "openai.yaml").read_bytes() == raw_openai
+    assert 'description: "Описание"\n' in (inst1 / "SKILL.md").read_text(encoding="utf-8")
+
+    # Case 2: non-UTF-8 SKILL.md with valid agents/openai.yaml.
+    snap2 = tmp_path / "snap-nonutf8-skill"
+    inst2 = tmp_path / "inst-nonutf8-skill"
+    (snap2 / "locales").mkdir(parents=True)
+    (snap2 / ".skill_triggers").mkdir()
+    (snap2 / "agents").mkdir()
+    (inst2 / "agents").mkdir(parents=True)
+    raw_bad_skill = b"---\nname: skill-latin1\ndescription: Caf\xe9\n---\nbody\n"
+    valid_openai = b"interface:\n  display_name: Old\n"
+    (snap2 / "SKILL.md").write_bytes(raw_bad_skill)
+    (inst2 / "SKILL.md").write_bytes(raw_bad_skill)
+    (snap2 / "agents" / "openai.yaml").write_bytes(valid_openai)
+    (inst2 / "agents" / "openai.yaml").write_bytes(valid_openai)
+    (snap2 / "locales" / "metadata.json").write_bytes(
+        (snap1 / "locales" / "metadata.json").read_bytes()
+    )
+    (snap2 / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
+
+    check2 = skillcheck.validate_skill(snap2, locale_value="ru")
+    assert not skillcheck.has_errors(check2)
+    assert [(i.severity, i.code, i.path) for i in check2] == [
+        ("warning", "locale.frontmatter_invalid", "SKILL.md"),
+    ]
+    issues2 = locale.render_locale(snap2, inst2, "ru")
+    assert any(i.code == "locale.frontmatter_invalid" and i.severity == "warning" for i in issues2)
+    assert (inst2 / "SKILL.md").read_bytes() == raw_bad_skill
+    assert (inst2 / "agents" / "openai.yaml").read_bytes() == (
+        'interface:\n  display_name: "Имя"\n'.encode("utf-8")
+    )
+
+    # Case 3: end-to-end installer.install succeeds with warning and preserves non-UTF-8 openai.yaml.
+    repo_dir, _ = make_skill_repo(
+        skills_root,
+        "skill-nonutf8",
+        {
+            "SKILL.md": raw_skill.decode("utf-8"),
+            "locales/metadata.json": json.dumps(
+                {"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}
+            ),
+            ".skill_triggers/ru.md": "- триггер\n",
+        },
+        tag="v0",
+    )
+    (repo_dir / "agents").mkdir(exist_ok=True)
+    (repo_dir / "agents" / "openai.yaml").write_bytes(raw_openai)
+    from conftest import commit_all, run
+
+    commit_all(repo_dir, "add latin1 openai.yaml")
+    run(["git", "tag", "v1"], repo_dir)
+    project = make_project(tmp_path, "proj-nonutf8")
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-nonutf8", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    res = installer.install(cfg)[0]
+    assert not res.errors
+    assert any(
+        "skill-nonutf8" in msg and "'ru'" in msg and "interface" in msg
+        for msg in res.messages
+    )
+    assert (project / ".agents" / "skills" / "skill-nonutf8" / "agents" / "openai.yaml").read_bytes() == raw_openai
+    assert 'description: "Описание"\n' in (
+        project / ".agents" / "skills" / "skill-nonutf8" / "SKILL.md"
+    ).read_text(encoding="utf-8")
