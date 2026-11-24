@@ -14,7 +14,7 @@ import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from . import build_https as build_https_module
 from . import build_ssh as build_ssh_module
@@ -419,9 +419,12 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     projects: dict[str, ProjectConfig] = {}
     for alias, raw in projects_raw.items():
         if not isinstance(alias, str) or not identifiers.is_valid_identifier(alias):
-            raise ConfigError(f"Project alias {alias!r} must be a portable identifier")
+            raise ConfigError(
+                f"Global config {path} key 'projects.{alias}': "
+                f"Project alias {alias!r} must be a portable identifier"
+            )
         if not isinstance(raw, dict):
-            raise ConfigError(f"Project {alias!r} config must be an object")
+            raise ConfigError(f"Global config {path} key 'projects.{alias}': Project {alias!r} config must be an object")
         _reject_unknown_fields(
             raw,
             {"path", "agents", "project_alias", "checkout_alias"},
@@ -436,12 +439,18 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
         if project_alias is None:
             project_alias = alias
         if not isinstance(project_alias, str) or not identifiers.is_valid_identifier(project_alias):
-            raise ConfigError(f"Project {alias!r} field 'project_alias' must be a portable identifier when present")
+            raise ConfigError(
+                f"Global config {path} key 'projects.{alias}.project_alias': "
+                f"Project {alias!r} field 'project_alias' must be a portable identifier when present"
+            )
         checkout_alias = raw.get("checkout_alias", alias)
         if checkout_alias is None:
             checkout_alias = alias
         if not isinstance(checkout_alias, str) or not identifiers.is_valid_identifier(checkout_alias):
-            raise ConfigError(f"Project {alias!r} field 'checkout_alias' must be a portable identifier when present")
+            raise ConfigError(
+                f"Global config {path} key 'projects.{alias}.checkout_alias': "
+                f"Project {alias!r} field 'checkout_alias' must be a portable identifier when present"
+            )
         projects[alias] = ProjectConfig(
             alias=alias,
             path=Path(project_path).expanduser(),
@@ -470,8 +479,8 @@ def parse_config(data: dict[str, Any], path: Path) -> GlobalConfig:
     )
 
 
-def save_config(config: GlobalConfig) -> None:
-    data = {
+def _serialize_config(config: GlobalConfig) -> dict[str, Any]:
+    data: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "skills_root": str(config.skills_root),
         "preferred_locale": config.preferred_locale,
@@ -517,7 +526,88 @@ def save_config(config: GlobalConfig) -> None:
         }
     if config.experimental.skillfile_sources:
         data["experimental"] = {"skillfile_sources": True}
+    return data
+
+
+def validate_config(config: GlobalConfig) -> dict[str, Any]:
+    """Serialize and validate a config with the same parser that load uses."""
+    data = _serialize_config(config)
+    parse_config(data, config.path)
+    return data
+
+
+def save_config(config: GlobalConfig) -> None:
+    data = validate_config(config)
     _write_json_atomic(config.path, data)
+
+
+def repair_remove_build_scope(
+    section: Literal["build_ssh", "build_https"],
+    scope: str,
+    path: Path | None = None,
+) -> tuple[bool, str | None]:
+    """Remove a broken build-credential scope when full load fails on that section.
+
+    Returns ``(removed, remaining_warning)``. Raises ``ConfigError`` without
+    writing whenever the config cannot be read, the scope is absent, or the
+    config has an invalid field outside ``section``.
+    """
+    resolved = path or config_path()
+    try:
+        user_data = protocol_json.loads(protocol_json.read_bytes(resolved))
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Global config not found: {resolved}") from exc
+    except protocol_json.ProtocolJSONError as exc:
+        raise ConfigError(f"Malformed JSON in global config {resolved}: {exc}") from exc
+    if not isinstance(user_data, dict):
+        raise ConfigError("Global config must be a JSON object")
+
+    raw_section = user_data.get(section)
+    if not isinstance(raw_section, dict) or scope not in raw_section:
+        return False, None
+
+    repaired = dict(user_data)
+    updated_section = {k: v for k, v in raw_section.items() if k != scope}
+    if updated_section:
+        repaired[section] = updated_section
+    else:
+        repaired.pop(section, None)
+
+    def _validate_with_optional_system(candidate: dict[str, Any]) -> None:
+        merged = candidate
+        system_path = system_config_path()
+        if system_path is not None:
+            try:
+                system_data = protocol_json.loads(protocol_json.read_bytes(system_path))
+            except FileNotFoundError:
+                system_data = None
+            except protocol_json.ProtocolJSONError as exc:
+                raise ConfigError(
+                    f"Malformed JSON in system config {system_path}: {exc}"
+                ) from exc
+            if system_data is not None:
+                if not isinstance(system_data, dict):
+                    raise ConfigError(
+                        f"System config {system_path} must be a JSON object"
+                    )
+                merged = _apply_system_config(
+                    system_data, candidate, system_path, quiet=True
+                )
+        parse_config(merged, resolved)
+
+    remaining_warning: str | None = None
+    try:
+        _validate_with_optional_system(repaired)
+    except ConfigError as remaining_error:
+        # Allow stepwise repair only when the remaining failure is another
+        # invalid entry in the same build credential section and the rest of
+        # the config validates cleanly.
+        without_section = {k: v for k, v in repaired.items() if k != section}
+        _validate_with_optional_system(without_section)
+        remaining_warning = str(remaining_error)
+
+    _write_json_atomic(resolved, repaired)
+    return True, remaining_warning
 
 
 def skillfile_sources_enabled(config: GlobalConfig | None = None) -> bool:
@@ -619,7 +709,9 @@ def add_project(
     )
     # dataclasses.replace keeps every other field, so a new config field can
     # never be silently dropped by project registration again.
-    return dataclasses.replace(config, projects=projects)
+    updated = dataclasses.replace(config, projects=projects)
+    validate_config(updated)
+    return updated
 
 
 def validate_skills_root_for_work(config: GlobalConfig) -> None:

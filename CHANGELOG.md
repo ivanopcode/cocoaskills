@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning during GC, and keep read-only legacy runtime lookups working for
   skills named `registry`, snapshots with adjacent files, and sources with a
   `snapshot` segment.
+- Validate every global config mutation through the load parser before writing
+  atomically (`csk bootstrap`, `csk config build-ssh add/remove`,
+  `csk config build-https add/login/remove`, `csk project add`, and interactive
+  build credential persistence) and verify the target project directory exists
+  before persisting `csk project add`, leaving `config.json` byte-identical on
+  any refusal.
+- Allow `csk config build-ssh remove <scope>` (and `build-https remove <scope>`)
+  to repair an already-invalid scope entry written by an earlier release, and
+  include the config path and `projects.<alias>` key in invalid project-alias
+  load errors.
 
 ## [0.23.1] - 2026-11-23
 

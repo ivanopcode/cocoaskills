@@ -1407,7 +1407,9 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
                         known_hosts=None,
                     ),
                 )
+                build_ssh.parse_rules(build_ssh.serialize_rules(build_ssh_rules))
             except build_ssh.BuildSSHError as exc:
+                build_ssh_rules = ()
                 print(f"Skipping build-ssh setup: {terminal_text(exc)}")
                 print("You can configure it later with: csk config build-ssh add")
     cfg = config.GlobalConfig(
@@ -1505,6 +1507,28 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
             all_os=args.all_os, config_status=config_status,
         ))
         return EXIT_OK
+    if args.build_ssh_command == "remove":
+        try:
+            cfg = config.load_config()
+        except config.ConfigError as load_exc:
+            repaired, remaining_warning = config.repair_remove_build_scope(
+                "build_ssh", args.scope
+            )
+            if not repaired:
+                raise load_exc
+            print(f"Removed build-ssh scope {terminal_text(args.scope)}")
+            if remaining_warning:
+                print(f"warning: {terminal_text(remaining_warning)}", file=sys.stderr)
+            return EXIT_OK
+        remaining = tuple(
+            rule for rule in cfg.build_ssh if rule.scope != args.scope
+        )
+        if len(remaining) == len(cfg.build_ssh):
+            print(f"No build-ssh scope {terminal_text(args.scope)!r}", file=sys.stderr)
+            return EXIT_CONFIG
+        config.save_config(replace(cfg, build_ssh=remaining))
+        print(f"Removed build-ssh scope {terminal_text(args.scope)}")
+        return EXIT_OK
     cfg = config.load_config()
     if args.build_ssh_command == "list":
         if not cfg.build_ssh:
@@ -1519,16 +1543,6 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
             if rule.known_hosts is not None:
                 parts.append(f"known_hosts={rule.known_hosts}")
             print(f"{terminal_text(rule.scope)}: " + terminal_text(" ".join(parts)))
-        return EXIT_OK
-    if args.build_ssh_command == "remove":
-        remaining = tuple(
-            rule for rule in cfg.build_ssh if rule.scope != args.scope
-        )
-        if len(remaining) == len(cfg.build_ssh):
-            print(f"No build-ssh scope {terminal_text(args.scope)!r}", file=sys.stderr)
-            return EXIT_CONFIG
-        config.save_config(replace(cfg, build_ssh=remaining))
-        print(f"Removed build-ssh scope {terminal_text(args.scope)}")
         return EXIT_OK
     # add
     if args.agent is None and args.identity is None:
@@ -1545,16 +1559,51 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
             identity=args.identity,
             known_hosts=args.known_hosts,
         )
-    except build_ssh.BuildSSHError as exc:
+        build_ssh.parse_rules(build_ssh.serialize_rules((rule,)))
+        others = tuple(r for r in cfg.build_ssh if r.scope != args.scope)
+        config.save_config(replace(cfg, build_ssh=others + (rule,)))
+    except (build_ssh.BuildSSHError, config.ConfigError) as exc:
         print(terminal_text(str(exc)), file=sys.stderr)
         return EXIT_CONFIG
-    others = tuple(r for r in cfg.build_ssh if r.scope != args.scope)
-    config.save_config(replace(cfg, build_ssh=others + (rule,)))
     print(f"Configured build-ssh scope {terminal_text(args.scope)}")
     return EXIT_OK
 
 
 def _cmd_config_build_https(args: argparse.Namespace) -> int:
+    if args.build_https_command == "remove":
+        try:
+            cfg = config.load_config()
+        except config.ConfigError as load_exc:
+            repaired, remaining_warning = config.repair_remove_build_scope(
+                "build_https", args.scope
+            )
+            if not repaired:
+                raise load_exc
+            print(f"Removed build-https scope {terminal_text(args.scope)}")
+            if remaining_warning:
+                print(f"warning: {terminal_text(remaining_warning)}", file=sys.stderr)
+            return EXIT_OK
+        remaining = tuple(
+            rule for rule in cfg.build_https if rule.scope != args.scope
+        )
+        if len(remaining) == len(cfg.build_https):
+            print(f"No build-https scope {terminal_text(args.scope)!r}", file=sys.stderr)
+            return EXIT_CONFIG
+        config.save_config(replace(cfg, build_https=remaining))
+        # "git credential reject" exits 0 whether or not an entry existed, so
+        # the message only claims a token removal after a read proved one.
+        host = build_https.scope_host(args.scope)
+        home = build_https.resolve_operator_home()
+        had_token = (
+            build_https.read_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
+            is not None
+        )
+        build_https.delete_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
+        if had_token:
+            print(f"Removed build-https scope {terminal_text(args.scope)} and its stored token")
+        else:
+            print(f"Removed build-https scope {terminal_text(args.scope)}")
+        return EXIT_OK
     cfg = config.load_config()
     if args.build_https_command == "list":
         if not cfg.build_https:
@@ -1577,34 +1626,20 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                 parts.append("stored=yes" if stored else "stored=NO")
             print(f"{terminal_text(rule.scope)}: " + terminal_text(" ".join(parts)))
         return EXIT_OK
-    if args.build_https_command == "remove":
-        remaining = tuple(
-            rule for rule in cfg.build_https if rule.scope != args.scope
-        )
-        if len(remaining) == len(cfg.build_https):
-            print(f"No build-https scope {terminal_text(args.scope)!r}", file=sys.stderr)
-            return EXIT_CONFIG
-        config.save_config(replace(cfg, build_https=remaining))
-        # "git credential reject" exits 0 whether or not an entry existed, so
-        # the message only claims a token removal after a read proved one.
-        host = build_https.scope_host(args.scope)
-        home = build_https.resolve_operator_home()
-        had_token = (
-            build_https.read_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
-            is not None
-        )
-        build_https.delete_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
-        if had_token:
-            print(f"Removed build-https scope {terminal_text(args.scope)} and its stored token")
-        else:
-            print(f"Removed build-https scope {terminal_text(args.scope)}")
-        return EXIT_OK
     if args.build_https_command == "login":
         import getpass
 
         try:
             build_ssh.validate_scope(args.scope)
-        except build_ssh.BuildSSHError as exc:
+            rule = build_https.BuildHTTPSRule(
+                scope=args.scope,
+                token="keyring",
+                username=args.username or "token",
+            )
+            others = tuple(r for r in cfg.build_https if r.scope != args.scope)
+            updated = replace(cfg, build_https=others + (rule,))
+            config.validate_config(updated)
+        except (build_ssh.BuildSSHError, build_https.BuildHTTPSError, config.ConfigError) as exc:
             print(terminal_text(str(exc)), file=sys.stderr)
             return EXIT_CONFIG
         if sys.stdin.isatty():
@@ -1622,16 +1657,10 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
                 git=resolve_tool("git"),
                 home=build_https.resolve_operator_home(),
             )
-        except build_https.BuildHTTPSError as exc:
+            config.save_config(updated)
+        except (build_https.BuildHTTPSError, config.ConfigError) as exc:
             print(terminal_text(str(exc)), file=sys.stderr)
             return EXIT_CONFIG
-        rule = build_https.BuildHTTPSRule(
-            scope=args.scope,
-            token="keyring",
-            username=args.username or "token",
-        )
-        others = tuple(r for r in cfg.build_https if r.scope != args.scope)
-        config.save_config(replace(cfg, build_https=others + (rule,)))
         print(f"Stored a token for {terminal_text(args.scope)} through your Git credential helper")
         return EXIT_OK
     # add
@@ -1650,11 +1679,11 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
             username=args.username or "token",
         )
         build_https.parse_rules(build_https.serialize_rules((rule,)))
-    except (build_ssh.BuildSSHError, build_https.BuildHTTPSError) as exc:
+        others = tuple(r for r in cfg.build_https if r.scope != args.scope)
+        config.save_config(replace(cfg, build_https=others + (rule,)))
+    except (build_ssh.BuildSSHError, build_https.BuildHTTPSError, config.ConfigError) as exc:
         print(terminal_text(str(exc)), file=sys.stderr)
         return EXIT_CONFIG
-    others = tuple(r for r in cfg.build_https if r.scope != args.scope)
-    config.save_config(replace(cfg, build_https=others + (rule,)))
     print(f"Configured build-https scope {terminal_text(args.scope)}")
     return EXIT_OK
 
@@ -1664,7 +1693,8 @@ def _cmd_project_add(alias: str, path: Path) -> int:
 
     cfg = config.load_config()
     home = cfg.path.parent
-    if dispatch.manager_home_inside_root(home, path.expanduser()):
+    project_root = path.expanduser()
+    if dispatch.manager_home_inside_root(home, project_root):
         print(
             f"error: cannot register project {terminal_text(alias)}: the manager home "
             f"{terminal_text(home)} is inside {terminal_text(path)}; use a manager home outside every "
@@ -1672,10 +1702,11 @@ def _cmd_project_add(alias: str, path: Path) -> int:
             file=sys.stderr,
         )
         return EXIT_CONFIG
-    skillfile_deprecations.check_path(path.expanduser() / "Skillfile.json")
     updated = config.add_project(cfg, alias, path)
+    manifest.require_project_dir(project_root)
+    skillfile_deprecations.check_path(project_root / "Skillfile.json")
+    manifest.ensure_project_manifest(project_root, alias=alias, agents=cfg.default_agents)
     config.save_config(updated)
-    manifest.ensure_project_manifest(path.expanduser(), alias=alias, agents=cfg.default_agents)
     registered = updated.projects[alias]
     # POSIX-only slice: Windows registers config without a dispatch scope
     # (Windows launchers are a separate task).

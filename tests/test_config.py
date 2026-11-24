@@ -534,3 +534,222 @@ def test_skillfile_sources_legacy_env_is_ignored(monkeypatch, tmp_path):
     cfg = config.parse_config(_minimal_config_data(tmp_path), tmp_path / "config.json")
     assert cfg.experimental.skillfile_sources is False
     assert config.skillfile_sources_enabled(cfg) is True
+
+
+def _write_valid_config(tmp_path, monkeypatch):
+    from csk import cli  # noqa: F401
+
+    cfg_path = tmp_path / "home" / "config.json"
+    cfg = config.parse_config(_minimal_config_data(tmp_path), cfg_path)
+    config.save_config(cfg)
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    return cfg_path
+
+
+@pytest.mark.parametrize(
+    ("extra_args", "expected_fragment"),
+    [
+        (["--identity", ""], "build_ssh.gitlab.example.com.identity must be a non-empty string"),
+        (["--agent", ""], "build_ssh.gitlab.example.com.agent must be a non-empty string"),
+        (
+            ["--agent", "auto", "--known-hosts", ""],
+            "build_ssh.gitlab.example.com.known_hosts must be a non-empty string",
+        ),
+        (
+            ["--identity", "x" * 4097],
+            "build_ssh.gitlab.example.com.identity must be a non-empty string",
+        ),
+        (
+            ["--agent", "a" * 4097],
+            "build_ssh.gitlab.example.com.agent must be a non-empty string",
+        ),
+    ],
+)
+def test_cli_build_ssh_add_rejects_invalid_values_and_preserves_config_bytes(
+    tmp_path, monkeypatch, capsys, extra_args, expected_fragment
+):
+    # Invalid build-ssh add arguments fail before writing and leave config.json byte-identical; a valid add succeeds and reloads.
+    from csk import cli
+
+    cfg_path = _write_valid_config(tmp_path, monkeypatch)
+    before = cfg_path.read_bytes()
+
+    rc = cli.main(["config", "build-ssh", "add", "gitlab.example.com", *extra_args])
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert expected_fragment in err
+    assert cfg_path.read_bytes() == before
+
+    # Positive control: valid rule succeeds and reloads cleanly.
+    assert (
+        cli.main(
+            ["config", "build-ssh", "add", "gitlab.example.com", "--identity", "~/.ssh/id_ed25519"]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    loaded = config.load_config(cfg_path)
+    assert len(loaded.build_ssh) == 1
+    assert loaded.build_ssh[0].identity == "~/.ssh/id_ed25519"
+
+
+def test_cli_build_ssh_remove_repairs_broken_entry_without_weakening_load(
+    tmp_path, monkeypatch, capsys
+):
+    # config build-ssh remove repairs an entry broken by an older release while load_config and unrelated invalid configs still refuse strictly.
+    from csk import cli
+
+    cfg_path = _write_valid_config(tmp_path, monkeypatch)
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw["build_ssh"] = {
+        "gitlab.example.com": {"identity": ""},
+        "code.example.com": {"agent": "auto"},
+    }
+    cfg_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    # Load-time validation stays strict.
+    assert cli.main(["config", "build-ssh", "list"]) == cli.EXIT_CONFIG
+    assert "must be a non-empty string" in capsys.readouterr().err
+
+    # Repair removes the broken scope and restores a valid config.
+    assert cli.main(["config", "build-ssh", "remove", "gitlab.example.com"]) == 0
+    out = capsys.readouterr().out
+    assert "Removed build-ssh scope gitlab.example.com" in out
+    loaded = config.load_config(cfg_path)
+    assert [rule.scope for rule in loaded.build_ssh] == ["code.example.com"]
+    assert cli.main(["config", "build-ssh", "list"]) == 0
+    assert "code.example.com: agent=auto" in capsys.readouterr().out
+
+    # Stepwise repair when two build_ssh scopes are broken works sequentially.
+    raw2 = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw2["build_ssh"] = {
+        "first.example.com": {"identity": ""},
+        "second.example.com": {"agent": ""},
+    }
+    cfg_path.write_text(json.dumps(raw2, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    assert cli.main(["config", "build-ssh", "remove", "first.example.com"]) == 0
+    captured = capsys.readouterr()
+    assert "Removed build-ssh scope first.example.com" in captured.out
+    assert "warning:" in captured.err
+    assert cli.main(["config", "build-ssh", "remove", "second.example.com"]) == 0
+    capsys.readouterr()
+    assert config.load_config(cfg_path).build_ssh == ()
+
+    # Negative control: if the config is invalid outside build_ssh, remove refuses and preserves bytes.
+    raw3 = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw3["build_ssh"] = {"gitlab.example.com": {"identity": ""}}
+    raw3["projects"] = {"my app": {"path": str(tmp_path)}}
+    cfg_path.write_text(json.dumps(raw3, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    before_bad = cfg_path.read_bytes()
+    assert cli.main(["config", "build-ssh", "remove", "gitlab.example.com"]) == cli.EXIT_CONFIG
+    capsys.readouterr()
+    assert cfg_path.read_bytes() == before_bad
+
+
+def test_cli_project_add_rejects_invalid_alias_and_missing_path_preserving_config_bytes(
+    tmp_path, monkeypatch, capsys
+):
+    # project add validates both alias and directory existence before writing, leaving config.json byte-identical on refusal; valid project add succeeds.
+    from csk import cli
+
+    cfg_path = _write_valid_config(tmp_path, monkeypatch)
+    existing = tmp_path / "good-project"
+    existing.mkdir()
+    before = cfg_path.read_bytes()
+
+    rc_alias = cli.main(["project", "add", "my app", str(existing)])
+    err_alias = capsys.readouterr().err
+    assert rc_alias != 0
+    assert "portable identifier" in err_alias
+    assert cfg_path.read_bytes() == before
+    assert not (existing / "Skillfile.json").exists()
+
+    missing = tmp_path / "nonexistent-project"
+    rc_missing = cli.main(["project", "add", "good", str(missing)])
+    err_missing = capsys.readouterr().err
+    assert rc_missing != 0
+    assert "project path does not exist" in err_missing
+    assert cfg_path.read_bytes() == before
+
+    # Positive control: valid alias and existing directory succeed and reload cleanly.
+    assert cli.main(["project", "add", "good", str(existing)]) == 0
+    capsys.readouterr()
+    loaded = config.load_config(cfg_path)
+    assert "good" in loaded.projects
+    assert loaded.projects["good"].path == existing
+
+
+def test_load_config_invalid_project_alias_names_file_and_key(tmp_path):
+    # Invalid project alias load errors name both the config file path and the projects.<alias> key without weakening validation.
+    cfg_path = tmp_path / "config.json"
+    raw = _minimal_config_data(tmp_path, projects={"my app": {"path": str(tmp_path)}})
+    cfg_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(config.ConfigError) as exc_info:
+        config.load_config(cfg_path)
+    message = str(exc_info.value)
+    assert str(cfg_path) in message
+    assert "projects.my app" in message
+    assert "portable identifier" in message
+
+
+def test_other_config_mutators_validate_before_writing(tmp_path, monkeypatch, capsys):
+    # save_config, bootstrap, and build-https add/login reject invalid mutations before writing, leaving config.json byte-identical.
+    from csk import cli
+
+    cfg_path = _write_valid_config(tmp_path, monkeypatch)
+    before = cfg_path.read_bytes()
+
+    # Direct save_config validates with parse_config before touching disk.
+    loaded = config.load_config(cfg_path)
+    bad_cfg = config.GlobalConfig(
+        path=cfg_path,
+        skills_root=loaded.skills_root,
+        preferred_locale="../bad",
+        default_agents=loaded.default_agents,
+        adapter_mode=loaded.adapter_mode,
+        worktree_alias_pattern=loaded.worktree_alias_pattern,
+        projects=loaded.projects,
+    )
+    with pytest.raises(config.ConfigError, match="preferred_locale"):
+        config.save_config(bad_cfg)
+    assert cfg_path.read_bytes() == before
+
+    # bootstrap --non-interactive --force refuses invalid preferred_locale before overwriting.
+    rc_boot = cli.main(
+        [
+            "bootstrap",
+            "--non-interactive",
+            "--force",
+            "--skills-root",
+            str(tmp_path / "skills"),
+            "--preferred-locale",
+            "../en",
+        ]
+    )
+    capsys.readouterr()
+    assert rc_boot != 0
+    assert cfg_path.read_bytes() == before
+
+    # build-https add rejects invalid token_env before writing.
+    rc_https = cli.main(
+        ["config", "build-https", "add", "gitlab.example.com", "--token-env", "not valid"]
+    )
+    capsys.readouterr()
+    assert rc_https != 0
+    assert cfg_path.read_bytes() == before
+
+    # build-https login rejects oversized username before storing token or writing config.
+    rc_login = cli.main(
+        [
+            "config",
+            "build-https",
+            "login",
+            "gitlab.example.com",
+            "--username",
+            "u" * 4097,
+        ]
+    )
+    capsys.readouterr()
+    assert rc_login != 0
+    assert cfg_path.read_bytes() == before
