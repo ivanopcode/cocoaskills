@@ -9,21 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Validate declared dependency (`dependencies.skills.*.git`) and external build
-  repository (`build_repositories.*.git`) URLs in `csk skill check` using the
-  shared offline URL validator and `canonical_urls.SpellingIndex` (reporting
-  invalid URLs as `skill.dependency_url_invalid` and within-manifest spelling
+- Validate declared dependency URLs (`dependencies.skills.*.git`) in
+  `csk skill check` using the shared offline URL validator and
+  `canonical_urls.SpellingIndex` (reporting invalid URLs as
+  `skill.dependency_url_invalid` and within-manifest dependency spelling
   conflicts as `skill.dependency_url_conflict`, plus an informational `note:`
   suggesting `csk skill check --network` when HTTP(S) URLs are present offline).
+  External build repositories (`build_repositories.*.git`) keep their existing
+  manifest validation and do not participate in spelling conflicts; install-time
+  validation is unchanged.
 - Add `csk skill check --network` to send one discovery request per unique
-  declared HTTP(S) repository URL through the shared `git_ops.probe_declared_url`
+  declared HTTP(S) repository URL (`dependencies.skills.*.git` and
+  `build_repositories.*.git`) through the shared `git_ops.probe_declared_url`
   probe (without credential helpers, prompts, extra headers or cookies),
   reporting redirects as `skill.dependency_url_redirect` errors (exit code 1)
   with the canonical spelling when identified and unreachable/unverified URLs as
   `skill.dependency_url_unverified` warnings (exit code 0, omitting `: ok`).
-- Report invalid declared Git URLs in `csk check --canonical-urls` and validate
-  `file:` URLs in `git_ops.declared_fetch_url` so the installer, `csk check
-  --canonical-urls` and `csk skill check` agree on the same inputs.
+- Report invalid declared Git URLs in `csk check --canonical-urls` so the
+  installer, `csk check --canonical-urls` and `csk skill check` agree on the
+  same inputs.
 
 ## [0.23.2] - 2026-11-25
 

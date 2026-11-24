@@ -31,7 +31,7 @@ from conftest import (
     write_skillfile,
 )
 
-from csk import cli, git_ops, skillcheck
+from csk import cli, git_ops, installer, skillcheck
 
 OLD = "https://gitlab.test/team/{}"
 NEW = "https://gitlab.test/team/{}.git"
@@ -225,9 +225,6 @@ def _setup_project_env(
         ("ftp://gitlab.test/team/b.git", None),
         ("-uhttps://gitlab.test/team/b.git", None),
         ("https://gitlab.test/", None),
-        ("file://otherhost/team/b", None),
-        ("file:relative/dep", None),
-        ("file:///abs/dep?token=secret-file", "secret-file"),
     ],
 )
 def test_offline_malformed_or_forbidden_dependency_urls_are_errors(
@@ -329,14 +326,15 @@ def test_offline_valid_dependency_urls_are_clean_and_hint_only_for_http(
     assert "note:" not in json_out.out
 
 
-# Offline validation flags conflicting spellings of one repository identity across dependencies and build_repositories via SpellingIndex.
+# Offline validation flags conflicting spellings of one repository identity among dependencies.skills.*.git via SpellingIndex and never conflicts with build_repositories.
 @pytest.mark.parametrize(
     "case",
     [
         "deps-bare-vs-git",
         "deps-https-vs-ssh",
         "dep-vs-build-repo",
-        "build-repos-conflict",
+        "dep-ssh-vs-build-https",
+        "build-repos-different-spellings",
         "local-path-vs-file-uri",
         "same-spelling-ok",
         "same-relative-local-ok",
@@ -367,8 +365,15 @@ def test_offline_conflicting_spellings_within_manifest_are_errors(
             {"dep-a": "https://gitlab.test/team/tool"},
             build_repositories={"tool-src": "https://gitlab.test/team/tool.git"},
         )
-        expect_conflict = ("dependencies.skills.dep-a.git", "build_repositories.tool-src.git")
-    elif case == "build-repos-conflict":
+        expect_conflict = None
+    elif case == "dep-ssh-vs-build-https":
+        skill_dir = _write_skill_with_deps(
+            tmp_path / "skill",
+            {"dep-a": "ssh://git@gitlab.test/team/tool.git"},
+            build_repositories={"tool-src": "https://gitlab.test/team/tool.git"},
+        )
+        expect_conflict = None
+    elif case == "build-repos-different-spellings":
         skill_dir = _write_skill_with_deps(
             tmp_path / "skill",
             build_repositories={
@@ -376,7 +381,7 @@ def test_offline_conflicting_spellings_within_manifest_are_errors(
                 "tool-b": "ssh://git@gitlab.test/team/tool.git",
             },
         )
-        expect_conflict = ("build_repositories.tool-a.git", "build_repositories.tool-b.git")
+        expect_conflict = None
     elif case == "local-path-vs-file-uri":
         skill_dir = _write_skill_with_deps(
             tmp_path / "skill",
@@ -624,6 +629,119 @@ def test_network_handles_typed_and_untyped_git_errors(
         assert ": ok" not in out.out
 
 
+# git_ops.declared_fetch_url keeps base behavior for file:// URLs so installs never gain a new refusal.
+def test_declared_fetch_url_preserves_base_file_otherhost_behavior() -> None:
+    assert git_ops.declared_fetch_url("file://otherhost/abs/path") == "file://otherhost/abs/path"
+
+
+# A dependency and a build repository spelling one repository differently stay clean in skill check, installer and csk check --canonical-urls.
+@pytest.mark.parametrize(
+    ("dep_url", "build_url"),
+    [
+        (NEW.format("b"), OLD.format("b")),
+        ("ssh://git@gitlab.test/team/b.git", NEW.format("b")),
+    ],
+    ids=["dotgit-vs-bare", "ssh-vs-https"],
+)
+def test_dependency_vs_build_repo_different_spelling_agrees_across_install_check_and_skill_check(
+    loopback_host: _LoopbackGitHost,
+    tmp_path: Path,
+    csk_home: Path,
+    skills_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    dep_url: str,
+    build_url: str,
+) -> None:
+    loopback_host.publish("b", "v1")
+    loopback_host.clone(skills_root, "b", dep_url)
+
+    consumer_manifest = {
+        "schema_version": 7,
+        "capabilities": {"exec": "none", "network": "none"},
+        "dependencies": {
+            "skills": {
+                "b": {"git": dep_url, "ref": {"kind": "tag", "value": "v1"}, "mode": "context"}
+            }
+        },
+        "build_repositories": {
+            "tools-src": {
+                "git": build_url,
+                "locked_commit": {"object_format": "sha1", "hex": SHA1},
+            }
+        },
+        "commands": {
+            "cmd-tools-src": {
+                "type": "build",
+                "driver": "go-repository-v1",
+                "repository": "tools-src",
+                "target": "tool",
+            }
+        },
+    }
+    resolver_hint = (
+        "---\nname: consumer\ndescription: consumer skill\n---\n\n"
+        "Resolve .agents/bin/tool (tool.cmd on Windows), then global/bin/tool, "
+        "then command -v tool or Get-Command tool.\n"
+    )
+    consumer_repo, _ = make_skill_repo(
+        skills_root,
+        "consumer",
+        {"SKILL.md": resolver_hint, "agent-skill.json": json.dumps(consumer_manifest)},
+        tag="v1",
+    )
+    # Require consumer in context mode from a wrapper skill so real csk install runs full
+    # closure resolution and installer._validate_skills without building the external repo.
+    wrapper_manifest = {
+        "schema_version": 4,
+        "capabilities": {"exec": "none", "network": "none"},
+        "dependencies": {
+            "skills": {
+                "consumer": {
+                    "git": str(consumer_repo),
+                    "ref": {"kind": "tag", "value": "v1"},
+                    "mode": "context",
+                }
+            }
+        },
+    }
+    make_skill_repo(
+        skills_root,
+        "wrapper",
+        {"agent-skill.json": json.dumps(wrapper_manifest)},
+        tag="v1",
+    )
+    _setup_project_env(
+        tmp_path,
+        csk_home,
+        skills_root,
+        monkeypatch,
+        [{"name": "wrapper", "tag": "v1"}],
+    )
+
+    # 1. csk skill check (offline): no conflict issue, exit 0.
+    rc_skill = cli.main(["skill", "check", str(consumer_repo)])
+    out_skill = capsys.readouterr()
+    assert rc_skill == cli.EXIT_OK, out_skill.out + out_skill.err
+    assert f"{consumer_repo.resolve()}: ok" in out_skill.out
+
+    # 2. installer._validate_skills (legacy and global path): zero validation errors.
+    from types import SimpleNamespace
+
+    install_issues = installer._validate_skills([SimpleNamespace(snapshot=consumer_repo)], None)  # type: ignore[list-item]
+    assert [i for _p, i in install_issues if i.severity == "error"] == []
+
+    # 3. real csk install (positive control, unchanged against base): exit 0.
+    rc_install = cli.main(["install", "app"])
+    out_install = capsys.readouterr()
+    assert rc_install == cli.EXIT_OK, out_install.out + out_install.err
+
+    # 4. csk check --canonical-urls: unchanged, exit 0.
+    rc_check = cli.main(["check", "--canonical-urls", "app"])
+    out_check = capsys.readouterr()
+    assert rc_check == cli.EXIT_OK, out_check.out + out_check.err
+
+
 # Installer, csk check --canonical-urls and csk skill check reach the same verdict across shared valid, malformed, conflicting, redirect and unverified cases.
 @pytest.mark.parametrize(
     "case",
@@ -637,7 +755,6 @@ def test_network_handles_typed_and_untyped_git_errors(
         "malformed-port",
         "malformed-query",
         "malformed-scheme",
-        "malformed-file-host",
         "valid-local-path",
         "valid-ssh-scp",
         "network-unverified",
@@ -710,11 +827,6 @@ def test_installer_check_canonical_urls_and_skill_check_agree_on_shared_cases(
         forbidden_secret = "query-secret"
     elif case == "malformed-scheme":
         bad_url = "ftp://gitlab.test/team/b.git"
-        deps = {"b": bad_url}
-        project_skills = [{"name": "b", "git": bad_url, "tag": "v1"}]
-        expected_outcome = "refuse"
-    elif case == "malformed-file-host":
-        bad_url = "file://otherhost/team/b"
         deps = {"b": bad_url}
         project_skills = [{"name": "b", "git": bad_url, "tag": "v1"}]
         expected_outcome = "refuse"

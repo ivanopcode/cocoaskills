@@ -209,10 +209,8 @@ def declared_fetch_url(url: str, base: Path | None = None) -> str:
         identity = canonical_source_identity(url)
     except SourceIdentityError as exc:
         raise GitError(f"Invalid declared Git source: {exc}") from exc
-    if identity is None:
-        local_path = _local_source_path(url, base if base is not None else Path.cwd())
-        if not url.lower().startswith("file:"):
-            return str(local_path)
+    if identity is None and not url.lower().startswith("file:"):
+        return str(_local_source_path(url, base if base is not None else Path.cwd()))
     return url
 
 

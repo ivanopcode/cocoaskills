@@ -4500,7 +4500,9 @@ def _validate_skills(
 ) -> list[tuple[SkillPlan, skillcheck.ValidationIssue]]:
     issues: list[tuple[SkillPlan, skillcheck.ValidationIssue]] = []
     for plan in plans:
-        for issue in skillcheck.validate_skill(plan.snapshot, locale_value=effective_locale):
+        for issue in skillcheck.validate_skill(
+            plan.snapshot, locale_value=effective_locale, check_dependency_urls=False
+        ):
             issues.append((plan, issue))
     return issues
 

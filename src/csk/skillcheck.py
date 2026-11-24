@@ -106,12 +106,15 @@ def has_http_repository_urls(skill_dir: Path) -> bool:
         spec = skillspec.load_skill_spec(skill_dir)
     except skillspec.SkillSpecError:
         return False
-    for _, raw_url in _declared_repository_urls(spec):
+    for name in sorted(spec.requirements):
         try:
-            spelling = git_ops.declared_fetch_url(raw_url, skill_dir)
+            spelling = git_ops.declared_fetch_url(spec.requirements[name].git, skill_dir)
         except git_ops.GitError:
             continue
         if urlsplit(spelling).scheme.lower() in {"http", "https"}:
+            return True
+    for name in sorted(spec.build_repositories):
+        if urlsplit(spec.build_repositories[name].git).scheme.lower() in {"http", "https"}:
             return True
     return False
 
@@ -120,32 +123,21 @@ def _skill_spec_path(skill_dir: Path) -> str:
     return skillspec.manifest_source_path(skill_dir)
 
 
-def _declared_repository_urls(spec: skillspec.SkillSpec) -> list[tuple[str, str]]:
-    urls: list[tuple[str, str]] = [
-        (f"dependencies.skills.{name}.git", spec.requirements[name].git)
-        for name in sorted(spec.requirements)
-    ]
-    urls.extend(
-        (f"build_repositories.{name}.git", spec.build_repositories[name].git)
-        for name in sorted(spec.build_repositories)
-    )
-    return urls
-
-
 def _dependency_url_issues(
     skill_dir: Path,
     spec: skillspec.SkillSpec,
     *,
     network: bool,
 ) -> list[ValidationIssue]:
-    declared = _declared_repository_urls(spec)
-    if not declared:
+    if not spec.requirements and not spec.build_repositories:
         return []
     manifest_path = _skill_spec_path(skill_dir)
     issues: list[ValidationIssue] = []
     index = canonical_urls.SpellingIndex()
     http_fields: dict[str, list[str]] = {}
-    for field, raw_url in declared:
+    for name in sorted(spec.requirements):
+        field = f"dependencies.skills.{name}.git"
+        raw_url = spec.requirements[name].git
         try:
             spelling = git_ops.declared_fetch_url(raw_url, skill_dir)
         except git_ops.GitError as exc:
@@ -161,6 +153,14 @@ def _dependency_url_issues(
         index.add(spelling, f"{manifest_path} ({field})")
         if urlsplit(spelling).scheme.lower() in {"http", "https"}:
             http_fields.setdefault(spelling, []).append(field)
+    for name in sorted(spec.build_repositories):
+        # Build repository URLs already pass build_repository.parse_repository_source
+        # during load_skill_spec; they are excluded from SpellingIndex because neither
+        # the closure guard nor csk check --canonical-urls indexes build repositories.
+        field = f"build_repositories.{name}.git"
+        raw_url = spec.build_repositories[name].git
+        if urlsplit(raw_url).scheme.lower() in {"http", "https"}:
+            http_fields.setdefault(raw_url, []).append(field)
     for _identity, message in index.conflicts():
         issues.append(
             ValidationIssue(
