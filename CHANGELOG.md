@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   durable mode restoration, and post-restore digest verification, allowing
   sealed runtime publication, rollback, and recovery of journals left in
   `rolling_back` by earlier releases to complete without manual `chmod`.
+- Preserve all non-localized YAML keys, nested structures, multi-line values,
+  and key ordering during localized rendering of `SKILL.md` frontmatter and
+  `agents/openai.yaml`, keeping source `triggers` intact when the selected
+  locale catalog supplies none and refusing unparseable frontmatter or
+  `agents/openai.yaml` consistently in both `csk skill check` and install
+  instead of silently dropping keys or skipping localization.
 
 ## [0.23.1] - 2026-11-23
 

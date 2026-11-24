@@ -433,3 +433,48 @@ def test_validate_accepts_build_command_shell_neutral_resolver(tmp_path):
     )
 
     assert skillcheck.validate_skill(tmp_path) == []
+
+
+def test_validate_reports_unparseable_frontmatter_and_openai_yaml_consistently_with_install(
+    tmp_path,
+):
+    # skillcheck.validate_skill reports locale.frontmatter_invalid and locale.openai_yaml_invalid when localized rendering cannot safely rewrite them; valid frontmatter passes.
+    (tmp_path / "locales").mkdir()
+    (tmp_path / ".skill_triggers").mkdir()
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "locales" / "metadata.json").write_text(
+        json.dumps(
+            {
+                "locales": {
+                    "ru": {
+                        "description": "Описание",
+                        "display_name": "Имя",
+                        "short_description": "Кратко",
+                        "default_prompt": "Промпт",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
+    (tmp_path / "SKILL.md").write_text("---\nname: bad\nmetadata: {unclosed\n---\n", encoding="utf-8")
+    (tmp_path / "agents" / "openai.yaml").write_text("interface: not-a-mapping\n", encoding="utf-8")
+
+    issues = skillcheck.validate_skill(tmp_path, locale_value="ru")
+    assert skillcheck.has_errors(issues)
+    assert [(issue.code, issue.path) for issue in issues] == [
+        ("locale.frontmatter_invalid", "SKILL.md"),
+        ("locale.openai_yaml_invalid", "agents/openai.yaml"),
+    ]
+
+    # Positive control: valid frontmatter and openai.yaml pass skillcheck cleanly.
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: good\nallowed-tools:\n  - Read\ndescription: Source\n---\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "agents" / "openai.yaml").write_text(
+        "version: 1\ninterface:\n  icon: ./i.svg\n",
+        encoding="utf-8",
+    )
+    assert skillcheck.validate_skill(tmp_path, locale_value="ru") == []
