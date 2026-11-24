@@ -481,7 +481,14 @@ def test_fast_selections_are_exact_checked_in_node_inventories() -> None:
     macos_worker_domain = _nodeids("go-e2e-macos-worker-domain-nodeids.txt")
     ubuntu = _nodeids("go-e2e-ubuntu-smoke-nodeids.txt")
 
-    assert len(protocol) == 10
+    assert len(protocol) == 14
+    for required_lifecycle in (
+        "tests/test_protocol_conformance.py::test_rc6_manager_lifecycle_case[bootstrap_cases:missing-config-if-missing]",
+        "tests/test_protocol_conformance.py::test_rc6_manager_lifecycle_case[upgrade_cases:selected-project-closure]",
+        "tests/test_protocol_conformance.py::test_rc6_manager_lifecycle_case[upgrade_cases:all-projects-deduplicate]",
+        "tests/test_protocol_conformance.py::test_rc6_manager_lifecycle_case[upgrade_cases:global-closure]",
+    ):
+        assert required_lifecycle in protocol
     assert native == [
         "tests/test_go_build_e2e.py::test_go_install_builds_without_network_and_does_not_launch[project]",
         "tests/test_go_build_e2e.py::test_go_install_builds_through_version_manager_shim_once[goenv]",

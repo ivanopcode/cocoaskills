@@ -1283,7 +1283,7 @@ def test_cli_upgrade_dry_run_does_not_create_or_fetch_skills_root(
     missing_root = tmp_path / "missing-skills-root"
     _register_project(monkeypatch, csk_home, missing_root, project)
 
-    def unexpected_fetch(_repo):
+    def unexpected_fetch(_repo, _declared_url=None):
         raise AssertionError("dry-run must not fetch")
 
     class ForbiddenLock:
@@ -1310,7 +1310,11 @@ def test_cli_upgrade_fetches_only_selected_project_skill_repositories(
     )
     _register_project(monkeypatch, csk_home, skills_root, project)
     fetched: list[Path] = []
-    monkeypatch.setattr(cli.git_ops, "fetch_repo", fetched.append)
+
+    def record_fetch(repo, _declared_url=None):
+        fetched.append(repo)
+
+    monkeypatch.setattr(cli.git_ops, "fetch_repo", record_fetch)
 
     assert cli.main(["upgrade", "app"]) == 0
 

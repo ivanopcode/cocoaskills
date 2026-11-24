@@ -6,7 +6,7 @@
   "audited_files_sha256": {
     "tests/test_protocol_conformance.py": "1821ddc0a28cad79907569e3334bbda9acce986261d7dcf58c28947f5c339405",
     "tests/protocol_conformance_adapters.py": "0bad47fc747cfaa8cd9ddc1abdbdd9545a38bb3b5d66d03469bb0dbfc07b2474",
-    "tests/protocol_lifecycle_observations.py": "85fd005ba8ed83a6615b7834e9c819b0ce26f986e6498352cc63d889f33c9cb4",
+    "tests/protocol_lifecycle_observations.py": "7331b3527aa2ba6def308c8f6b1872805510aa310d98eb77de59473d3c5f7dc2",
     "tests/conftest.py": "eb1196188f471b0290520c7e7afc67c67af4780fa30c5363157de786c6b977a6",
     "tests/child_cli_environment.py": "d160163b0e7104581b0d8ac1d9f5623fe2e54ae322b403753bcce988a2d55e15"
   },
@@ -228,6 +228,14 @@
       "change": "Certify the empty worker domain for the fake compiler's own injected operation failure.",
       "isolation_neutral": true,
       "rationale": "The fixture never launches a worker. Its default injected error now states that known outcome; explicit caller-supplied failures retain their own proof. Existing failure and positive results, node identities, temporary roots, environment, subprocess footprint, locks, caches and shard assignments are unchanged. This updates model evidence without resetting manager state or relaxing production refusal."
+    },
+    {
+      "file": "tests/protocol_lifecycle_observations.py",
+      "previous_sha256": "85fd005ba8ed83a6615b7834e9c819b0ce26f986e6498352cc63d889f33c9cb4",
+      "sha256": "7331b3527aa2ba6def308c8f6b1872805510aa310d98eb77de59473d3c5f7dc2",
+      "change": "Accept the optional declared_url argument in the fetch_repo test stubs inside _observe_upgrade_fetch and _observe_dry_run, and include stderr on exit_code assertion failure.",
+      "isolation_neutral": true,
+      "rationale": "git_ops.fetch_repo(repo, declared_url=None) accepts two arguments; replacing fetched_paths.append with a two-argument closure recording only repo restores the existing upgrade-closure observation without altering any protocol node, parameter, environment, cwd, temporary root, process, lock, cache, shared state, fixture lifetime, atomic cluster or shard assignment."
     }
   ],
   "method": {

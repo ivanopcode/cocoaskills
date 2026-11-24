@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Update `git_ops.fetch_repo` test stubs in the protocol lifecycle observation
+  harness (and CLI/global dry-run tests) to accept the optional `declared_url`
+  parameter, restoring the Merge protocol conformance lifecycle suite and adding
+  a representative `test_rc6_manager_lifecycle_case` slice to the pull-request
+  `fast_protocol` lane.
+
 ## [0.23.1] - 2026-11-23
 
 ### Fixed

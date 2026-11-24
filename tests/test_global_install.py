@@ -1152,7 +1152,7 @@ def test_global_upgrade_dry_run_does_not_create_or_fetch_skills_root(
         },
     )
 
-    def unexpected_fetch(_repo):
+    def unexpected_fetch(_repo, _declared_url=None):
         raise AssertionError("global dry-run must not fetch")
 
     class ForbiddenLock:

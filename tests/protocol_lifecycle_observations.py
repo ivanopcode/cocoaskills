@@ -3043,7 +3043,7 @@ def _observe_upgrade_dry_run(root: Path, *, global_scope: bool) -> list[str]:
             ) and label not in forbidden_calls:
                 forbidden_calls.append(label)
 
-    def unexpected_fetch(_repo: Path) -> None:
+    def unexpected_fetch(_repo: Path, _declared_url: str | None = None) -> None:
         forbidden_calls.append("source-fetch")
 
     def unexpected_clone(_remote: str, _destination: Path) -> None:
@@ -6819,12 +6819,16 @@ def _observe_upgrade_fetch(root: Path, *, mode: str) -> JsonObject:
         argv = ["upgrade", "app"]
     config_mod.save_config(cfg)
     fetched_paths: list[Path] = []
+
+    def record_fetch(repo: Path, _declared_url: str | None = None) -> None:
+        fetched_paths.append(repo)
+
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setenv("CSK_CONFIG", str(cfg.path))
-        monkeypatch.setattr(cli.git_ops, "fetch_repo", fetched_paths.append)
-        monkeypatch.setattr(global_install.git_ops, "fetch_repo", fetched_paths.append)
-        exit_code, _stdout, _stderr = _run_cli(argv)
-    assert exit_code == cli.EXIT_OK
+        monkeypatch.setattr(cli.git_ops, "fetch_repo", record_fetch)
+        monkeypatch.setattr(global_install.git_ops, "fetch_repo", record_fetch)
+        exit_code, _stdout, stderr = _run_cli(argv)
+    assert exit_code == cli.EXIT_OK, f"argv={argv!r} exit={exit_code} stderr={stderr!r}"
     fetched_resolved = [path.resolve(strict=False) for path in fetched_paths]
     direct_resolved = direct.resolve(strict=False)
     transitive_resolved = transitive.resolve(strict=False)
