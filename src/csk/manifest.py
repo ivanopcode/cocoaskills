@@ -118,11 +118,6 @@ def ensure_empty_manifest(project_root: Path) -> Path:
     return path
 
 
-def require_project_dir(project_root: Path) -> None:
-    """Public check that ``project_root`` is an existing project directory."""
-    _require_project_dir(project_root)
-
-
 def ensure_project_manifest(project_root: Path, *, alias: str, agents: list[str]) -> Path:
     _require_project_dir(project_root)
     path = manifest_path(project_root)

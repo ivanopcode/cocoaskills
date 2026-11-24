@@ -1725,7 +1725,6 @@ def _cmd_project_add(alias: str, path: Path) -> int:
         return EXIT_CONFIG
     updated = config.add_project(cfg, alias, path)
     config.validate_config(updated)
-    manifest.require_project_dir(project_root)
     skillfile_deprecations.check_path(project_root / "Skillfile.json")
     manifest.ensure_project_manifest(project_root, alias=alias, agents=cfg.default_agents)
     config.save_config(updated)
