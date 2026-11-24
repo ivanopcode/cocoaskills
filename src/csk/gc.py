@@ -12,7 +12,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from . import consumers, install_marker, locking, protocol_json, published_trees, transactions
+from . import (
+    consumers,
+    install_marker,
+    locking,
+    protocol_json,
+    published_trees,
+    snapshot,
+    transactions,
+)
 from .build_repository_pipeline import (
     EXTERNAL_ARTIFACT_NAMESPACES,
     EXTERNAL_SNAPSHOT_NAMESPACES,
@@ -218,6 +226,7 @@ def _collect_locked(
         stats.snapshots_removed = _collect_snapshots(
             csk_home,
             references.snapshots,
+            warnings=stats.warnings,
         )
 
     try:
@@ -541,24 +550,63 @@ def _generation_states(
 def _collect_snapshots(
     csk_home: Path,
     referenced: set[tuple[str, str]],
+    *,
+    warnings: list[str] | None = None,
 ) -> int:
-    cache_root = csk_home / "cache"
-    if not cache_root.exists() or cache_root.is_symlink():
-        return 0
+    cache_root = csk_home / snapshot.CACHE_DIRNAME
+    entries, walk_warnings = snapshot.iter_snapshot_entries(csk_home)
+    if warnings is not None:
+        warnings.extend(walk_warnings)
+    referenced_snapshot_paths = tuple(
+        snapshot.snapshot_dir(csk_home, src, cmt) for src, cmt in referenced
+    )
     removed = 0
-    # Layout: cache/<source>/<commit>/snapshot, where <source> may be nested.
-    for snapshot_dir in sorted(cache_root.rglob("snapshot")):
-        if snapshot_dir.is_symlink() or not snapshot_dir.is_dir():
+    for entry in entries:
+        if (entry.source, entry.commit) in referenced:
             continue
-        commit_dir = snapshot_dir.parent
-        source = commit_dir.parent.relative_to(cache_root).as_posix()
-        if (source, commit_dir.name) in referenced:
+        if any(
+            ref_path.is_relative_to(entry.snapshot_dir)
+            for ref_path in referenced_snapshot_paths
+        ):
+            if warnings is not None:
+                warnings.append(
+                    "snapshot entry retained because a referenced snapshot lies under it: "
+                    f"{entry.snapshot_dir}"
+                )
             continue
-        shutil.rmtree(commit_dir)
+        if entry.unexpected_siblings:
+            if warnings is not None:
+                warnings.append(
+                    "snapshot entry retained because commit directory contains unexpected entries: "
+                    f"{entry.commit_dir}"
+                )
+            continue
+        try:
+            shutil.rmtree(entry.commit_dir)
+        except OSError as exc:
+            if warnings is not None:
+                warnings.append(
+                    f"cannot remove unreferenced snapshot {entry.commit_dir}: {exc}"
+                )
+            continue
         removed += 1
-        parent = commit_dir.parent
-        while parent != cache_root and not any(parent.iterdir()):
-            parent.rmdir()
+        parent = entry.commit_dir.parent
+        while parent != cache_root:
+            try:
+                parent_info = parent.lstat()
+                if stat.S_ISLNK(parent_info.st_mode) or not stat.S_ISDIR(
+                    parent_info.st_mode
+                ):
+                    break
+                if any(parent.iterdir()):
+                    break
+                parent.rmdir()
+            except OSError as exc:
+                if warnings is not None:
+                    warnings.append(
+                        f"cannot prune empty snapshot cache directory {parent}: {exc}"
+                    )
+                break
             parent = parent.parent
     return removed
 

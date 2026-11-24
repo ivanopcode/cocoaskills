@@ -187,13 +187,14 @@ def validate_legacy_runtime(path: Path, *, home: Path) -> None:
         return
     skill, commit = path.parent.name, path.name
     inventory = None
-    cache = home / "cache"
-    if cache.is_dir():
-        # Equal Git commit IDs identify the same source tree across aliases.
-        for snapshot in sorted(cache.glob(f"**/{commit}/snapshot")):
-            if snapshot.is_dir() and not snapshot.is_symlink():
-                inventory = runtime_inventory(snapshot)
-                break
+    from . import snapshot as snapshot_mod
+
+    entries, _warnings = snapshot_mod.iter_snapshot_entries(home)
+    # Equal Git commit IDs identify the same source tree across aliases.
+    for entry in entries:
+        if entry.commit == commit and not entry.unexpected_siblings:
+            inventory = runtime_inventory(entry.snapshot_dir)
+            break
     if inventory is None:
         # Still report a known unsafe entry with its precise removal remedy.
         validate_tree(path, home=home, skill=skill, member=commit, inventory=None)

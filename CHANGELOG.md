@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter, restoring the Merge protocol conformance lifecycle suite and adding
   a representative `test_rc6_manager_lifecycle_case` slice to the pull-request
   `fast_protocol` lane.
+- Enumerate snapshot cache entries by walking `cache/<source>/<commit>/snapshot`
+  without descending into snapshot contents, staging directories, `cache/registry`,
+  or symbolic links, so live snapshots whose repositories contain a `snapshot/`
+  directory are never deleted by GC or shadowed during legacy runtime inventory
+  validation. Shallow or malformed `snapshot` entries and source paths containing
+  a `snapshot` segment are retained with a warning instead of crashing or deleting
+  live snapshots or sibling sources.
 
 ## [0.23.1] - 2026-11-23
 

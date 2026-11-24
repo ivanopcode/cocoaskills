@@ -337,3 +337,283 @@ def test_cli_gc_command_reports_summary(monkeypatch, tmp_path, skills_root, csk_
     assert cli.main(["gc"]) == 0
     out = capsys.readouterr().out
     assert "gc: removed" in out
+
+
+def test_collect_snapshots_preserves_live_snapshot_containing_snapshot_dirs(
+    tmp_path, skills_root, csk_home, monkeypatch, capsys
+):
+    # A live snapshot whose tree contains top-level snapshot/ and nested foo/snapshot/ survives _collect_snapshots, post-install GC, and public `csk gc`, while an unreferenced snapshot beside it is collected.
+    from csk import cli
+
+    # Function-level regression witness + positive control.
+    live_snap = csk_home / "cache" / "src" / "c1" / "snapshot"
+    (live_snap / "snapshot").mkdir(parents=True)
+    (live_snap / "snapshot" / "a.txt").write_text("top-level", encoding="utf-8")
+    (live_snap / "foo" / "snapshot").mkdir(parents=True)
+    (live_snap / "foo" / "snapshot" / "b.txt").write_text("nested", encoding="utf-8")
+    (live_snap / "SKILL.md").write_text("---\nname: src\n---\n", encoding="utf-8")
+
+    stale_snap = csk_home / "cache" / "src" / "c2" / "snapshot"
+    stale_snap.mkdir(parents=True)
+    (stale_snap / "SKILL.md").write_text("---\nname: src\n---\n", encoding="utf-8")
+
+    warnings: list[str] = []
+    removed = gc._collect_snapshots(csk_home, {("src", "c1")}, warnings=warnings)
+    assert removed == 1
+    assert warnings == []
+    assert (live_snap / "SKILL.md").is_file()
+    assert (live_snap / "snapshot" / "a.txt").is_file()
+    assert (live_snap / "foo" / "snapshot" / "b.txt").is_file()
+    assert not stale_snap.parent.exists()
+
+    # End-to-end witness through installer (post-install GC) and public `csk gc`.
+    project = make_project(tmp_path, "snap-proj")
+    make_skill_repo(
+        skills_root,
+        "skill-snap",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {
+                        "snaptool": {
+                            "type": "script",
+                            "unix_path": "scripts/tool",
+                            "win_path": "scripts/tool.cmd",
+                        }
+                    },
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
+            "snapshot/data.txt": "inside top-level snapshot dir\n",
+            "foo/snapshot/deep.txt": "inside nested snapshot dir\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-snap", "tag": "v1"}]})
+    cfg_path = csk_home / "config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "skills_root": str(skills_root),
+                "projects": {"snap-proj": {"path": str(project), "agents": ["codex_cli"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = make_config(csk_home, skills_root, project)
+    assert not installer.install(cfg)[0].errors
+
+    live_commits = list((csk_home / "cache" / "skill-snap").iterdir())
+    assert len(live_commits) == 1
+    installed_snap = live_commits[0] / "snapshot"
+    assert (installed_snap / "snapshot" / "data.txt").is_file()
+    assert (installed_snap / "foo" / "snapshot" / "deep.txt").is_file()
+
+    extra_stale = csk_home / "cache" / "skill-snap" / ("0" * 40) / "snapshot"
+    extra_stale.mkdir(parents=True)
+
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    assert cli.main(["gc"]) == 0
+    _ = capsys.readouterr()
+    assert (installed_snap / "SKILL.md").is_file()
+    assert (installed_snap / "snapshot" / "data.txt").is_file()
+    assert (installed_snap / "foo" / "snapshot" / "deep.txt").is_file()
+    assert not extra_stale.parent.exists()
+
+
+def test_collect_snapshots_retains_shallow_snapshot_dirs_with_warnings(
+    tmp_path, skills_root, csk_home
+):
+    # Shallow `cache/snapshot` and `cache/<x>/snapshot` entries do not raise ValueError, are retained with warnings in stats.warnings, and do not block collecting valid unreferenced snapshots.
+    top_level = csk_home / "cache" / "snapshot"
+    top_level.mkdir(parents=True)
+    (top_level / "keep.txt").write_text("top", encoding="utf-8")
+
+    one_below = csk_home / "cache" / "onelevel" / "snapshot"
+    one_below.mkdir(parents=True)
+    (one_below / "keep.txt").write_text("one", encoding="utf-8")
+
+    stale = csk_home / "cache" / "valid-source" / "deadbeef" / "snapshot"
+    stale.mkdir(parents=True)
+
+    project = make_project(tmp_path, "shallow-proj")
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    cfg = _two_project_config(csk_home, skills_root, project)
+
+    stats = gc.collect_runtime(cfg, csk_home)
+
+    assert stats.snapshots_removed == 1
+    assert not stale.parent.exists()
+    assert (top_level / "keep.txt").is_file()
+    assert (one_below / "keep.txt").is_file()
+    assert any(str(top_level) in w for w in stats.warnings)
+    assert any(str(one_below) in w for w in stats.warnings)
+
+
+def test_collect_snapshots_retains_sources_with_snapshot_path_segment_with_warning(
+    tmp_path, skills_root, csk_home
+):
+    # Sources whose path contains a `snapshot` segment (including host/snapshot/repo and deeper org/team/snapshot/repo) are retained with warnings, live sibling sources under the same host/org survive, and unreferenced sibling/normal snapshots are still collected.
+    shallow_source = csk_home / "cache" / "snapshot" / "skill-a" / "c1" / "snapshot"
+    shallow_source.mkdir(parents=True)
+    (shallow_source / "SKILL.md").write_text("a", encoding="utf-8")
+
+    host_snapshot_repo = csk_home / "cache" / "host" / "snapshot" / "repo" / "c2" / "snapshot"
+    host_snapshot_repo.mkdir(parents=True)
+    (host_snapshot_repo / "SKILL.md").write_text("b", encoding="utf-8")
+    host_sibling_live = csk_home / "cache" / "host" / "other-repo" / "c2live" / "snapshot"
+    host_sibling_live.mkdir(parents=True)
+    (host_sibling_live / "SKILL.md").write_text("live-sibling", encoding="utf-8")
+    host_sibling_stale = csk_home / "cache" / "host" / "stale-repo" / "c2stale" / "snapshot"
+    host_sibling_stale.mkdir(parents=True)
+
+    deep_live = csk_home / "cache" / "org" / "team" / "snapshot" / "c3" / "snapshot"
+    deep_live.mkdir(parents=True)
+    (deep_live / "SKILL.md").write_text("c", encoding="utf-8")
+
+    deep_with_sibling = csk_home / "cache" / "corp" / "eng" / "snapshot" / "repo" / "c4" / "snapshot"
+    deep_with_sibling.mkdir(parents=True)
+    (deep_with_sibling / "SKILL.md").write_text("d", encoding="utf-8")
+    deep_sibling_live = csk_home / "cache" / "corp" / "eng" / "other-repo" / "c4live" / "snapshot"
+    deep_sibling_live.mkdir(parents=True)
+    (deep_sibling_live / "SKILL.md").write_text("corp-live-sibling", encoding="utf-8")
+    deep_sibling_stale = csk_home / "cache" / "corp" / "eng" / "stale-repo" / "c4stale" / "snapshot"
+    deep_sibling_stale.mkdir(parents=True)
+
+    stale_normal = csk_home / "cache" / "normal-src" / "c5" / "snapshot"
+    stale_normal.mkdir(parents=True)
+
+    warnings: list[str] = []
+    removed = gc._collect_snapshots(
+        csk_home,
+        {
+            ("host/other-repo", "c2live"),
+            ("org/team/snapshot", "c3"),
+            ("corp/eng/other-repo", "c4live"),
+        },
+        warnings=warnings,
+    )
+
+    assert removed == 3
+    assert not host_sibling_stale.parent.exists()
+    assert not deep_sibling_stale.parent.exists()
+    assert not stale_normal.parent.exists()
+    assert (shallow_source / "SKILL.md").is_file()
+    assert (host_snapshot_repo / "SKILL.md").is_file()
+    assert (host_sibling_live / "SKILL.md").is_file()
+    assert (deep_live / "SKILL.md").is_file()
+    assert (deep_with_sibling / "SKILL.md").is_file()
+    assert (deep_sibling_live / "SKILL.md").is_file()
+    assert len(warnings) == 4
+
+
+def test_collect_snapshots_never_touches_or_prunes_registry_cache(csk_home):
+    # The audit registry cache under cache/registry is skipped by snapshot enumeration and never deleted or pruned, even when it holds nested directories named snapshot, while a stale snapshot beside it is removed.
+    registry_dir = csk_home / "cache" / "registry"
+    (registry_dir / "nested" / "c1" / "snapshot").mkdir(parents=True)
+    (registry_dir / "nested" / "c1" / "snapshot" / "data.json").write_text("{}", encoding="utf-8")
+    (registry_dir / "records-abc.json").write_text("{}", encoding="utf-8")
+
+    stale = csk_home / "cache" / "stale-src" / "c2" / "snapshot"
+    stale.mkdir(parents=True)
+
+    warnings: list[str] = []
+    removed = gc._collect_snapshots(csk_home, set(), warnings=warnings)
+
+    assert removed == 1
+    assert warnings == []
+    assert not stale.parent.exists()
+    assert (registry_dir / "records-abc.json").is_file()
+    assert (registry_dir / "nested" / "c1" / "snapshot" / "data.json").is_file()
+
+
+def test_validate_legacy_runtime_ignores_nested_snapshot_content_decoy(tmp_path, csk_home):
+    # Legacy runtime validation enumerates only top-level cache/<source>/<commit>/snapshot entries and never adopts a matching <commit>/snapshot directory nested inside another snapshot's content.
+    from csk import published_trees
+
+    manifest = json.dumps(
+        {
+            "schema_version": 1,
+            "commands": {
+                "tool": {
+                    "type": "script",
+                    "unix_path": "scripts/tool",
+                    "win_path": "scripts/tool.cmd",
+                }
+            },
+        }
+    )
+    bin_name = "tool.cmd" if os.name == "nt" else "tool"
+
+    # Create a decoy <commit>/snapshot nested inside another snapshot's tree.
+    other_snap = csk_home / "cache" / "other" / "c_other" / "snapshot"
+    decoy = other_snap / "c_target" / "snapshot"
+    (decoy / "scripts").mkdir(parents=True)
+    (decoy / "csk-skill.json").write_text(manifest, encoding="utf-8")
+    (decoy / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (decoy / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
+
+    runtime_entry = csk_home / "runtime" / "my-skill" / "c_target"
+    (runtime_entry / "bin").mkdir(parents=True)
+    (runtime_entry / "bin" / bin_name).write_text("#!/bin/sh\n", encoding="utf-8")
+
+    # Negative case: with only the nested decoy present, validation must report missing inventory.
+    try:
+        published_trees.validate_legacy_runtime(runtime_entry, home=csk_home)
+    except published_trees.RuntimeInventoryUnavailable:
+        pass
+    else:
+        raise AssertionError("expected RuntimeInventoryUnavailable for nested decoy")
+
+    # Positive control: adding the real cache/<source>/<commit>/snapshot allows validation to succeed.
+    real_snap = csk_home / "cache" / "my-skill" / "c_target" / "snapshot"
+    (real_snap / "scripts").mkdir(parents=True)
+    (real_snap / "csk-skill.json").write_text(manifest, encoding="utf-8")
+    (real_snap / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (real_snap / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    published_trees.validate_legacy_runtime(runtime_entry, home=csk_home)
+
+
+def test_collect_snapshots_retains_symlinked_snapshot_and_warns(tmp_path, csk_home):
+    # A symlinked snapshot entry is retained with a warning and its target outside cache is untouched, while a real unreferenced snapshot beside it is removed.
+    outside = tmp_path / "outside-target"
+    outside.mkdir()
+    marker = outside / "important.txt"
+    marker.write_text("keep", encoding="utf-8")
+
+    linked_commit = csk_home / "cache" / "linked-src" / "c1"
+    linked_commit.mkdir(parents=True)
+    (linked_commit / "snapshot").symlink_to(outside)
+
+    real_stale = csk_home / "cache" / "real-src" / "c2" / "snapshot"
+    real_stale.mkdir(parents=True)
+
+    warnings: list[str] = []
+    removed = gc._collect_snapshots(csk_home, set(), warnings=warnings)
+
+    assert removed == 1
+    assert not real_stale.parent.exists()
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert (linked_commit / "snapshot").is_symlink()
+    assert any("not a real directory" in w for w in warnings)
+
+
+def test_collect_snapshots_does_not_descend_into_staging_tmp_dirs(csk_home):
+    # Interrupted `.snapshot-<commit>.tmp` staging directories containing a nested `snapshot/` tree are never descended into or treated as snapshot candidates, while a real unreferenced snapshot beside them is removed.
+    orphan_tmp = csk_home / "cache" / "src" / "c1" / ".snapshot-c1.tmp"
+    (orphan_tmp / "snapshot").mkdir(parents=True)
+    (orphan_tmp / "snapshot" / "inside.txt").write_text("staging", encoding="utf-8")
+
+    real_stale = csk_home / "cache" / "src" / "c2" / "snapshot"
+    real_stale.mkdir(parents=True)
+
+    warnings: list[str] = []
+    removed = gc._collect_snapshots(csk_home, set(), warnings=warnings)
+
+    assert removed == 1
+    assert not real_stale.parent.exists()
+    assert (orphan_tmp / "snapshot" / "inside.txt").is_file()
+    assert any(str(orphan_tmp) in w for w in warnings)
