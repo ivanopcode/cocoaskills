@@ -335,9 +335,13 @@ def select_user_bin_with_warning(
         (home / ".local" / "bin", (".local", "bin")),
         (home / "bin", ("bin",)),
     ]
+    skipped_symlink: Path | None = None
     for candidate, rel_parts in preferred:
-        if _path_contains(path_dirs, candidate) and _is_real_or_creatable_under(home, rel_parts):
-            return UserBinSelection(candidate)
+        if _path_contains(path_dirs, candidate):
+            if _is_real_or_creatable_under(home, rel_parts):
+                return UserBinSelection(candidate)
+            if skipped_symlink is None and _has_link_under(home, rel_parts):
+                skipped_symlink = candidate
 
     csk_executable = shutil.which("csk", path=env.get("PATH"))
     if csk_executable:
@@ -348,6 +352,14 @@ def select_user_bin_with_warning(
     for candidate in path_dirs:
         if _is_safe_home_bin(candidate, home=home, csk_home=csk_home):
             return UserBinSelection(candidate)
+    if skipped_symlink is not None:
+        return UserBinSelection(
+            None,
+            "global: command shims were installed in ~/.cocoaskills/global/bin, "
+            f"but {skipped_symlink} is a symbolic link and was skipped; "
+            f"set {USER_BIN_ENV} to a real writable directory, add "
+            "~/.cocoaskills/global/bin to PATH, or run csk shell-init",
+        )
     return UserBinSelection(None)
 
 
@@ -377,6 +389,15 @@ def _is_link_entry(path: Path) -> bool:
     except OSError:
         return False
     return stat.S_ISLNK(info.st_mode)
+
+
+def _has_link_under(base: Path, rel_parts: tuple[str, ...]) -> bool:
+    current = base
+    for part in rel_parts:
+        current = current / part
+        if _is_link_entry(current):
+            return True
+    return False
 
 
 def _is_real_or_creatable_under(base: Path, rel_parts: tuple[str, ...]) -> bool:

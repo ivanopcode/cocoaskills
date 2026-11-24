@@ -3608,11 +3608,15 @@ def _commit_transaction_targets(
     try:
         for committed_target in targets:
             if committed_target.desired_path is None:
-                shims.require_real_managed_dir(
-                    committed_target.live_path.parent,
-                    label="Materialization parent",
-                    allow_missing=True,
-                )
+                if (
+                    not committed_target.identifier.startswith("adapter/")
+                    and committed_target.target_class != "40-user-bin"
+                ):
+                    shims.require_real_managed_dir(
+                        committed_target.live_path.parent,
+                        label="Materialization parent",
+                        allow_missing=True,
+                    )
                 continue
             created.extend(
                 _make_missing_directories(

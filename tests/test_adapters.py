@@ -178,48 +178,58 @@ def test_transaction_auto_mode_rejects_cross_device_staging_without_probe(
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Creates POSIX directory symlinks")
-def test_adapters_refuse_symlinked_adapter_root_and_parent_without_deleting_target(tmp_path):
-    # Adapter refresh and planning refuse symlinked adapter roots or relative parents without deleting entries inside the target, while a real adapter root removes stale managed entries and preserves unmanaged files.
-    outside = tmp_path / "outside-skills"
-    (outside / "old-skill").mkdir(parents=True)
-    (outside / "old-skill" / "SKILL.md").write_text("keep", encoding="utf-8")
-    (outside / ".csk-managed.json").write_text(
+def test_adapters_follow_symlinked_user_agent_dirs_preserving_unmanaged_files(tmp_path):
+    # User-owned agent directories (such as a dotfiles-symlinked .claude or ~/.claude) remain followed during adapter refresh and planning, removing only ledger-managed entries while preserving unmanaged files; a symlinked .csk-managed.json ledger still refuses.
+    dotfiles_claude = tmp_path / "dotfiles-claude"
+    (dotfiles_claude / "skills" / "old-skill").mkdir(parents=True)
+    (dotfiles_claude / "skills" / "old-skill" / "SKILL.md").write_text("stale", encoding="utf-8")
+    (dotfiles_claude / "skills" / "handwritten.md").write_text("keep-user", encoding="utf-8")
+    (dotfiles_claude / "skills" / ".csk-managed.json").write_text(
         '{"entries": ["old-skill"], "schema_version": 1}\n',
         encoding="utf-8",
     )
 
     project = tmp_path / "project"
-    (project / ".claude").mkdir(parents=True)
-    (project / ".claude" / "skills").symlink_to(outside, target_is_directory=True)
+    canonical = project / ".agents" / "skills" / "new-skill"
+    canonical.mkdir(parents=True)
+    (canonical / "SKILL.md").write_text("new", encoding="utf-8")
+    (project / ".claude").symlink_to(dotfiles_claude, target_is_directory=True)
 
+    # Planning and direct refresh succeed through symlinked user-owned .claude,
+    # removing stale ledger entry while preserving unmanaged handwritten.md.
+    targets = adapters.plan_project_adapter_targets(
+        project,
+        ["claude_code"],
+        [adapters.AdapterGroup(canonical_root=project / ".agents" / "skills", skill_names=("new-skill",))],
+    )
+    assert any(t.desired_kind == "remove" and t.skill_name == "old-skill" for t in targets)
+    adapters.refresh_adapters(project, ["claude_code"], ["new-skill"], "copy")
+    assert not (dotfiles_claude / "skills" / "old-skill").exists()
+    assert (dotfiles_claude / "skills" / "new-skill" / "SKILL.md").read_text(encoding="utf-8") == "new"
+    assert (dotfiles_claude / "skills" / "handwritten.md").read_text(encoding="utf-8") == "keep-user"
+
+    # Global symlinked ~/.claude also succeeds and preserves unmanaged files.
+    csk_home = tmp_path / ".cocoaskills"
+    global_canonical = csk_home / "global" / "skills" / "global-skill"
+    global_canonical.mkdir(parents=True)
+    (global_canonical / "SKILL.md").write_text("global", encoding="utf-8")
+    user_home = tmp_path / "user-home"
+    user_home.mkdir()
+    global_dotfiles = tmp_path / "global-dotfiles-claude"
+    (global_dotfiles / "skills").mkdir(parents=True)
+    (global_dotfiles / "skills" / "manual.md").write_text("keep-global", encoding="utf-8")
+    (user_home / ".claude").symlink_to(global_dotfiles, target_is_directory=True)
+
+    adapters.refresh_global_adapters(csk_home, ["claude_code"], ["global-skill"], "copy", home=user_home)
+    assert (global_dotfiles / "skills" / "global-skill" / "SKILL.md").read_text(encoding="utf-8") == "global"
+    assert (global_dotfiles / "skills" / "manual.md").read_text(encoding="utf-8") == "keep-global"
+
+    # Negative control: a symlinked .csk-managed.json ledger inside the adapter dir still refuses.
+    outside_ledger = tmp_path / "outside-ledger.json"
+    outside_ledger.write_text('{"entries": ["new-skill"], "schema_version": 1}\n', encoding="utf-8")
+    ledger = dotfiles_claude / "skills" / ".csk-managed.json"
+    ledger.unlink()
+    ledger.symlink_to(outside_ledger)
     with pytest.raises(adapters.AdapterError, match="is a link"):
         adapters.refresh_adapters(project, ["claude_code"], [], "copy")
-    with pytest.raises(adapters.AdapterError, match="is a link"):
-        adapters.plan_project_adapter_targets(project, ["claude_code"], [])
-    assert (outside / "old-skill" / "SKILL.md").read_text(encoding="utf-8") == "keep"
-
-    # Symlinked relative parent (.claude -> outer) also refuses
-    outer_parent = tmp_path / "outer-parent"
-    (outer_parent / "skills" / "old-skill").mkdir(parents=True)
-    (outer_parent / "skills" / "old-skill" / "SKILL.md").write_text("keep-parent", encoding="utf-8")
-    (outer_parent / "skills" / ".csk-managed.json").write_text(
-        '{"entries": ["old-skill"], "schema_version": 1}\n',
-        encoding="utf-8",
-    )
-    project2 = tmp_path / "project2"
-    project2.mkdir()
-    (project2 / ".claude").symlink_to(outer_parent, target_is_directory=True)
-    with pytest.raises(adapters.AdapterError, match="is a link"):
-        adapters.refresh_adapters(project2, ["claude_code"], [], "copy")
-    assert (outer_parent / "skills" / "old-skill" / "SKILL.md").read_text(encoding="utf-8") == "keep-parent"
-
-    # Positive control: real adapter directory removes stale managed entry and keeps unmanaged file
-    real_project = tmp_path / "real-project"
-    canonical = real_project / ".agents" / "skills" / "skill-a"
-    canonical.mkdir(parents=True)
-    (canonical / "SKILL.md").write_text("managed", encoding="utf-8")
-    adapters.refresh_adapters(real_project, ["claude_code"], ["skill-a"], "copy")
-    (real_project / ".claude" / "skills" / "manual.txt").write_text("user", encoding="utf-8")
-    adapters.refresh_adapters(real_project, ["claude_code"], [], "copy")
-    assert not (real_project / ".claude" / "skills" / "skill-a").exists()
-    assert (real_project / ".claude" / "skills" / "manual.txt").read_text(encoding="utf-8") == "user"
+    assert (dotfiles_claude / "skills" / "new-skill" / "SKILL.md").is_file()

@@ -722,7 +722,7 @@ usage: csk global install [-h] [--dry-run] [--verbose] [--strict-tags]
 csk global install --only skill-metrics
 ```
 
-Команда разворачивает файлы скилла `skill-metrics` в пользовательские директории.
+Команда разворачивает файлы скилла `skill-metrics` в пользовательские директории. Если каталог форвардеров команд (`~/.local/bin`, `~/bin` или `CSK_GLOBAL_USER_BIN`) является символической ссылкой, публикация в него пропускается с предупреждением (задайте реальный каталог через `CSK_GLOBAL_USER_BIN`, добавьте `~/.cocoaskills/global/bin` в `PATH` или используйте `csk shell-init`); символическая ссылка вместо управляемого каталога `~/.cocoaskills/global/bin` отклоняется с ошибкой.
 
 ### csk global update
 

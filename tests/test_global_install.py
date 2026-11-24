@@ -2118,3 +2118,46 @@ def test_global_user_bin_refuses_symlinked_user_bin_preserving_foreign_files(tmp
     )
     assert not (target_dir / "old-tool").exists()
     assert (target_dir / "foreign-tool").read_text(encoding="utf-8") == "#!/bin/sh\necho foreign\n"
+
+    # Symlinked ~/.local/bin on PATH is skipped with an explicit warning and remedy, leaving target untouched.
+    dot_home = tmp_path / "dot-home"
+    (dot_home / ".local").mkdir(parents=True)
+    (dot_home / ".local" / "bin").symlink_to(target_dir, target_is_directory=True)
+    _, local_msgs = global_bins.plan_user_bin_targets(
+        csk_home,
+        {"tool"},
+        env={"PATH": str(dot_home / ".local" / "bin")},
+        home=dot_home,
+    )
+    assert any("symbolic link" in m and "CSK_GLOBAL_USER_BIN" in m for m in local_msgs)
+    assert (target_dir / "foreign-tool").read_text(encoding="utf-8") == "#!/bin/sh\necho foreign\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Creates POSIX directory symlinks")
+def test_global_install_succeeds_with_symlinked_user_claude_dir_preserving_unmanaged_files(
+    monkeypatch, tmp_path, skills_root, csk_home
+):
+    # Public `csk global install` succeeds when a user-owned agent directory such as ~/.claude is a dotfiles symlink, preserving unmanaged files inside it.
+    dotfiles_claude = tmp_path / "dotfiles-claude"
+    (dotfiles_claude / "skills").mkdir(parents=True)
+    unmanaged = dotfiles_claude / "skills" / "user-custom.md"
+    unmanaged.write_text("keep-me\n", encoding="utf-8")
+    Path.home().mkdir(parents=True, exist_ok=True)
+    (Path.home() / ".claude").symlink_to(dotfiles_claude, target_is_directory=True)
+
+    project = make_project(tmp_path, "proj-dotfiles")
+    cfg = make_config(csk_home, skills_root, project, agents=["claude_code"])
+    _save_config(monkeypatch, cfg)
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["claude_code"], "skills": [{"name": "skill-a", "tag": "v1"}]},
+    )
+
+    assert cli.main(["global", "install"]) == 0
+    assert (dotfiles_claude / "skills" / "skill-a" / "SKILL.md").is_file()
+    assert unmanaged.read_text(encoding="utf-8") == "keep-me\n"
+    _write_global_skillfile(csk_home, {"schema_version": 1, "agents": ["claude_code"], "skills": []})
+    assert cli.main(["global", "install"]) == 0
+    assert not (dotfiles_claude / "skills" / "skill-a").exists()
+    assert unmanaged.read_text(encoding="utf-8") == "keep-me\n"

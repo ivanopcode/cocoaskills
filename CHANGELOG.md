@@ -54,6 +54,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directories during shim cleanup, shim writes, adapter refresh, user-bin
   publishing, and project/global installs so foreign files in a linked target
   directory are never deleted or overwritten.
+- Refuse symlinked or non-directory csk-owned managed directories (`.agents`,
+  `.agents/bin`, `.agents/skills`, `global`, `global/bin`, `global/skills`,
+  `hybrid`, `hybrid/skills`, and `runtime`) during shim cleanup, shim writes,
+  and project/global installs so foreign files in a linked target directory are
+  never deleted or overwritten. User-owned agent directories (such as
+  `~/.claude` or `.claude`) continue to be followed via their `.csk-managed.json`
+  ledger; symlinked user-bin forwarding targets (`~/.local/bin`, `~/bin`, or
+  `CSK_GLOBAL_USER_BIN`) are skipped with a warning advising operators to point
+  `CSK_GLOBAL_USER_BIN` at a real writable directory, add
+  `~/.cocoaskills/global/bin` to `PATH`, or run `csk shell-init`.
 
 ## [0.23.1] - 2026-11-23
 
