@@ -95,6 +95,7 @@ from ..transactions import (
     digest_target,
     shared_block_digest,
     _target_digest,
+    _target_digest_recognizing_thaw,
 )
 from . import boundaries, consumers, modes, skillfile_v2, snapshot, source_audit, store
 from . import transport as source_transport
@@ -1078,6 +1079,7 @@ def stage_member_runtime(
 
     try:
         if runtime_staged.exists():
+            published_trees.make_private_writable(runtime_staged)
             shutil.rmtree(runtime_staged)
         runtime_staged.mkdir(parents=True)
         if spec.runtime_roots:
@@ -2504,7 +2506,7 @@ def _hook_live_digest(target: JournalTarget, *, subject: str) -> str:
     """Digest the live destination, mapping every failure to the boundary."""
 
     try:
-        return _target_digest(target, Path(target.live_path))
+        return _target_digest_recognizing_thaw(target, Path(target.live_path))
     except _FS_ERRORS as exc:
         raise SourceError(
             CODE_OUTPUT_OVERLAP,
@@ -2549,10 +2551,15 @@ def _hook_require_recognized_state(
         ):
             # The rename can survive before the journal state save. Require
             # the complete preimage in the backup, never merely its existence.
-            recognized = (
-                digest_target(Path(target.backup_path), kind=target.kind)
-                == expected_live
-            )
+            try:
+                backup_digest = _target_digest_recognizing_thaw(
+                    target, Path(target.backup_path)
+                )
+            except _FS_ERRORS:
+                backup_digest = None
+            except TransactionError:
+                backup_digest = None
+            recognized = backup_digest == expected_live
     else:
         recognized = live_digest in {ABSENT_DIGEST, target.desired_digest}
         if not recognized and live_digest == expected_live:
@@ -2714,7 +2721,11 @@ def _hook_home_entry(target: JournalTarget, payload: dict[str, Any], *, subject:
         )
     live_digest = _hook_live_digest(target, subject=subject)
     _hook_require_recognized_state(
-        target, live_digest, expected_live, subject=subject
+        target,
+        live_digest,
+        expected_live,
+        subject=subject,
+        allow_pending_backup=True,
     )
 
 

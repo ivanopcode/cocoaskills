@@ -443,3 +443,71 @@ def test_runtime_permission_crash_recovery(tmp_path, event, ordinal):
         clean.commit(guard, fresh.transaction_id)
     assert (live / 'scripts/tool').read_text() == 'new'
     assert all(not path.stat().st_mode & 0o222 for path in (live, *live.rglob('*')))
+
+
+# End-to-end schema-1 and schema-2 upgrade and uninstall succeed when macOS 15 refuses renamex_np(RENAME_EXCL) on 0555 directories.
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX read-only runtime permissions')
+def test_read_only_runtime_upgrade_and_uninstall_under_darwin_eacces_simulator(
+    installed_runtime, tmp_path, monkeypatch, capsys
+):
+    project, home, old_runtime, commit, cfg = installed_runtime
+    host_rename = (
+        transactions._darwin_rename_no_replace
+        if sys.platform == 'darwin'
+        else transactions._linux_rename_no_replace
+    )
+    attempts: list[tuple[Path, Path, int]] = []
+
+    def simulated_darwin_rename(source: Path, destination: Path) -> None:
+        info = source.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        attempts.append((source, destination, mode))
+        if (
+            stat.S_ISDIR(info.st_mode)
+            and not stat.S_ISLNK(info.st_mode)
+            and not (mode & stat.S_IWUSR)
+        ):
+            transactions._raise_posix_rename_error(13, source, destination)
+        host_rename(source, destination)
+
+    monkeypatch.setattr(transactions, '_is_darwin', lambda: True)
+    monkeypatch.setattr(transactions, '_darwin_rename_no_replace', simulated_darwin_rename)
+
+    document = json.loads((project / 'Skillfile.json').read_text())
+    if commit is not None:
+        authored = cfg.skills_root / 'writer'
+        (authored / 'scripts/tool').write_text('#!/bin/sh\nprintf replacement\n')
+        new_commit = commit_all(authored, 'replacement')
+        run(['git', 'tag', 'v2'], authored)
+        document['skills'][0]['tag'] = 'v2'
+    else:
+        authored = tmp_path / 'source/writer'
+        (authored / 'scripts/tool').write_text('#!/bin/sh\nprintf replacement\n')
+    write_skillfile(project, document)
+    rc = cli.main(['upgrade', 'app'])
+    output = capsys.readouterr()
+    assert rc == 0, f'upgrade failed:\nSTDOUT:\n{output.out}\nSTDERR:\n{output.err}'
+    # Positive control: the simulator actually refused at least one 0555 directory rename with EACCES.
+    assert any(not (mode & stat.S_IWUSR) for _src, _dst, mode in attempts)
+    if commit is not None:
+        new_runtime = home / 'runtime/writer' / new_commit
+    else:
+        member = source_lock.read_lock((project / 'Skillfile.lock.json').read_bytes()).members[0]
+        new_runtime = publish.runtime_entry_path(home, 'writer', package_identity_sha256(member.package))
+    assert new_runtime != old_runtime and new_runtime.is_dir()
+    assert not old_runtime.exists()
+    command = new_runtime / 'scripts/tool' if (new_runtime / 'scripts').exists() else next((new_runtime / 'bin').iterdir())
+    assert b'replacement' in command.read_bytes()
+    assert all(not path.stat().st_mode & 0o222 for path in (new_runtime, *new_runtime.rglob('*')))
+    assert not list((home / 'state/transactions/v1').glob('*.json*'))
+
+    attempts.clear()
+    document['skills'] = []
+    write_skillfile(project, document)
+    rc = cli.main(['install' if commit is not None else 'upgrade', 'app'])
+    output = capsys.readouterr()
+    assert rc == 0, f'uninstall failed:\nSTDOUT:\n{output.out}\nSTDERR:\n{output.err}'
+    assert any(not (mode & stat.S_IWUSR) for _src, _dst, mode in attempts)
+    assert not new_runtime.exists()
+    assert not (project / '.agents/bin/write-tool').exists()
+    assert not list((home / 'state/transactions/v1').glob('*.json*'))

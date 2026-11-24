@@ -1293,7 +1293,41 @@ jobs:
               final_dir = cross_dst if cross_rc == 0 else current
               os.chmod(final_dir, stat.S_IMODE(os.lstat(final_dir).st_mode) | stat.S_IWUSR)
               nested = os.path.join(final_dir, "nested")
-              os.chmod(nested, stat.S_IMODE(os.lstat(nested).st_mode) | stat.S_IWUSR)
+              payload = os.path.join(nested, "payload")
+              assert stat.S_IMODE(os.lstat(nested).st_mode) == 0o555
+              assert stat.S_IMODE(os.lstat(payload).st_mode) == 0o444
+
+              thawed_same_dst = os.path.join(os.path.dirname(final_dir), "thawed-same")
+              ctypes.set_errno(0)
+              thawed_same_rc = libc.renamex_np(
+                  os.fsencode(final_dir), os.fsencode(thawed_same_dst), 0x00000004
+              )
+              thawed_same_err = ctypes.get_errno()
+              print(
+                  f"probe root-only-thawed same-parent renamex_np(0x4): rc={thawed_same_rc} "
+                  f"errno={thawed_same_err} ({errno.errorcode.get(thawed_same_err, 'OK')})"
+              )
+              assert thawed_same_rc == 0, f"root-only thawed same-parent rename failed: {thawed_same_err}"
+
+              thawed_cross_parent = os.path.join(td, "thawed-other-parent")
+              os.makedirs(thawed_cross_parent)
+              thawed_cross_dst = os.path.join(thawed_cross_parent, "thawed-cross")
+              ctypes.set_errno(0)
+              thawed_cross_rc = libc.renamex_np(
+                  os.fsencode(thawed_same_dst), os.fsencode(thawed_cross_dst), 0x00000004
+              )
+              thawed_cross_err = ctypes.get_errno()
+              print(
+                  f"probe root-only-thawed cross-parent renamex_np(0x4): rc={thawed_cross_rc} "
+                  f"errno={thawed_cross_err} ({errno.errorcode.get(thawed_cross_err, 'OK')})"
+              )
+              assert thawed_cross_rc == 0, f"root-only thawed cross-parent rename failed: {thawed_cross_err}"
+
+              final_nested = os.path.join(thawed_cross_dst, "nested")
+              final_payload = os.path.join(final_nested, "payload")
+              assert stat.S_IMODE(os.lstat(final_nested).st_mode) == 0o555
+              assert stat.S_IMODE(os.lstat(final_payload).st_mode) == 0o444
+              os.chmod(final_nested, stat.S_IMODE(os.lstat(final_nested).st_mode) | stat.S_IWUSR)
           PY
 
       - name: Run targeted transaction and runtime-tree tests

@@ -3027,6 +3027,7 @@ def _make_sealed_tree(root: Path, payload: str) -> None:
     root.chmod(0o555)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
 @pytest.mark.parametrize("error_number", [13, 1])
 def test_darwin_sealed_directory_rename_thaws_retries_restores_and_preserves_digests(
     tmp_path: Path,
@@ -3120,6 +3121,7 @@ def test_darwin_sealed_directory_rename_thaws_retries_restores_and_preserves_dig
     assert old_digest != new_digest
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
 def test_darwin_rename_thaw_negative_controls_do_not_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3193,7 +3195,8 @@ def test_darwin_rename_thaw_negative_controls_do_not_retry(
     # EXDEV on live->backup was not retried.
     assert len([src for src, _dst, _m in exdev_attempts if src == exdev_live]) == 1
     _assert_mode_identity(exdev_live, 0o555)
-    assert exc_info.value is not None
+    assert isinstance(exc_info.value, OSError) and exc_info.value.errno == 18
+    assert not list(engine.journal_root.glob("*.json*"))
 
     # Control 4: sealed 0555 directory whose retry ALSO fails restores 0555 on source, preserves digest, and raises original EACCES.
     fail_home = tmp_path / "fail-home"
@@ -3247,6 +3250,7 @@ def test_darwin_rename_thaw_negative_controls_do_not_retry(
     assert not list(fail_engine.journal_root.glob("*.json*"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
 @pytest.mark.parametrize(
     "fault_point",
     [
@@ -3309,6 +3313,7 @@ def test_darwin_rename_thaw_crash_recovery_completes_without_catch22(
     assert not any(tmp_path.glob(".csk-txn-*"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
 def test_darwin_rename_thaw_recovery_rejects_tampered_tree(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3344,6 +3349,7 @@ def test_darwin_rename_thaw_recovery_rejects_tampered_tree(
     assert (engine.journal_root / "txn-thaw-tamper.json").exists()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
 def test_pre_fix_rolling_back_journal_recovers_on_darwin_eacces_without_manual_chmod(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3398,3 +3404,302 @@ def test_pre_fix_rolling_back_journal_recovers_on_darwin_eacces_without_manual_c
     _assert_mode_identity(live, 0o555)
     assert not journal_path.exists()
     assert not any(tmp_path.glob(".csk-txn-*"))
+
+
+def _build_home_entry_recheck(
+    project: Path,
+    home: Path,
+    *,
+    target_class: str,
+    identifier: str,
+    live: Path,
+    desired: Path | None,
+    expected_digest: str,
+) -> dict[str, Any]:
+    from csk.sources import publish
+
+    project.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+    live.parent.mkdir(parents=True, exist_ok=True)
+    record = publish.freeze_publication_record(project, home)
+    key = (target_class, identifier)
+    payloads = publish.build_recheck_payloads(
+        record=record,
+        project_path=project,
+        home=home,
+        staged_specs=(
+            publish.TargetSpec(
+                target_class=target_class,
+                identifier=identifier,
+                live_path=live,
+                kind="entry",
+                staged=desired,
+            ),
+        ),
+        live_digests={key: expected_digest},
+        admitted=frozenset(),
+    )
+    return payloads[key]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
+@pytest.mark.parametrize(
+    "fault_point",
+    [
+        None,
+        "before_rename_thaw",
+        "after_rename_thaw",
+        "after_thawed_rename",
+        "after_rename_restore",
+    ],
+)
+@pytest.mark.parametrize("operation", ["removal", "publish", "rollback_live", "rollback_backup"])
+def test_darwin_rename_thaw_hook_owned_commit_rollback_and_crash_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_point: str | None,
+    operation: str,
+):
+    # Hook-owned schema-2 home entries (removal, publish, rollback) tolerate the journaled root thaw during retry and recover cleanly from crashes at every thaw boundary.
+    from csk.sources import publish
+
+    project = tmp_path / "project"
+    home = tmp_path / "home"
+    live = home / "source-v1" / "runtime" / "skill-hex" / "pkg-hex"
+    desired = tmp_path / "desired"
+    hook = publish.make_publication_hook()
+    attempts = _install_darwin_sealed_dir_rename_simulator(monkeypatch, error_number=13)
+
+    if operation == "removal":
+        _make_sealed_tree(live, "old-runtime")
+        expected_digest = digest_path(live)
+        target_class, identifier = "80-removal", "runtime/writer/pkg"
+        desired_path: Path | None = None
+    elif operation == "publish":
+        _make_sealed_tree(desired, "new-runtime")
+        expected_digest = ABSENT_DIGEST
+        target_class, identifier = "20-runtime", "writer/pkg"
+        desired_path = desired
+    else:
+        _make_sealed_tree(live, "old-runtime")
+        _make_sealed_tree(desired, "new-runtime")
+        expected_digest = digest_path(live)
+        target_class, identifier = "20-runtime", "writer/pkg"
+        desired_path = desired
+
+    old_digest = digest_path(live)
+    new_digest = ABSENT_DIGEST if desired_path is None else digest_path(desired_path)
+    recheck = _build_home_entry_recheck(
+        project,
+        home,
+        target_class=target_class,
+        identifier=identifier,
+        live=live,
+        desired=desired_path,
+        expected_digest=expected_digest,
+    )
+    primary = MutableTarget(
+        target_class=target_class,
+        identifier=identifier,
+        live_path=live,
+        desired_path=desired_path,
+        expected_preimage_digest=expected_digest,
+        kind="entry",
+        publication_recheck=recheck,
+    )
+
+    is_rollback = operation.startswith("rollback_")
+    targets: list[MutableTarget] = [primary]
+    if is_rollback:
+        second_live = tmp_path / "second-live"
+        second_desired = _write(tmp_path / "second-desired", "trigger-rollback")
+        targets.append(_target("90-other", "fail-second", second_live, second_desired))
+
+    in_rollback = False
+    rollback_hits = 0
+
+    def fault_hook(point: str, current: JournalTarget | None) -> None:
+        nonlocal in_rollback, rollback_hits
+        if is_rollback and point == "after_install" and current is not None and current.identifier == "fail-second":
+            in_rollback = True
+            raise RuntimeError("force-rollback")
+        if fault_point is None:
+            return
+        if is_rollback:
+            if not in_rollback or point != fault_point:
+                return
+            if current is None or current.identifier != identifier:
+                return
+            rollback_hits += 1
+            wanted_hit = 1 if operation == "rollback_live" else 2
+            if rollback_hits == wanted_hit:
+                raise SimulatedCrash(f"{operation}:{fault_point}")
+            return
+        if point == fault_point and current is not None and current.identifier == identifier:
+            raise SimulatedCrash(f"{operation}:{fault_point}")
+
+    txn_id = f"txn-hook-thaw-{operation}-{fault_point or 'clean'}"
+    engine = TransactionEngine(home, fault_hook=fault_hook, pre_write_hook=hook)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(lock, _plan(txn_id, project, *targets))
+        if fault_point is None:
+            if is_rollback:
+                with pytest.raises(RuntimeError, match="force-rollback"):
+                    engine.commit(lock, txn_id)
+            else:
+                engine.commit(lock, txn_id)
+        else:
+            with pytest.raises(SimulatedCrash, match=f"{operation}:{fault_point}"):
+                engine.commit(lock, txn_id)
+
+    journal_path = engine.journal_root / f"{txn_id}.json"
+    if fault_point is not None:
+        raw = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert "pending_rename_thaw" in raw
+        with ManagerHomeLock(home) as lock:
+            TransactionEngine(home, pre_write_hook=hook).recover(lock)
+
+    assert attempts
+    assert not journal_path.exists()
+    assert not any(live.parent.glob(".csk-txn-*"))
+    if operation == "removal":
+        assert not live.exists()
+    elif operation == "publish":
+        assert digest_path(live) == new_digest
+        _assert_mode_identity(live, 0o555)
+        _assert_mode_identity(live / "nested", 0o555)
+    else:
+        assert digest_path(live) == old_digest
+        _assert_mode_identity(live, 0o555)
+        _assert_mode_identity(live / "nested", 0o555)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX read-only directory mode semantics")
+def test_darwin_rename_thaw_hook_owned_boundary_refuses_tampering_and_ancestor_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Positive controls: while live is thawed after a crash, subtree tampering and ancestor symlink swaps still refuse with source_output_overlap without chmodding a decoy target.
+    from csk.sources import publish
+    from csk.sources.errors import CODE_OUTPUT_OVERLAP, SourceError
+
+    hook = publish.make_publication_hook()
+    _install_darwin_sealed_dir_rename_simulator(monkeypatch, error_number=13)
+
+    # Control 1: foreign file added inside thawed live before recovery refuses with source_output_overlap.
+    project1 = tmp_path / "project1"
+    home1 = tmp_path / "home1"
+    live1 = home1 / "source-v1" / "runtime" / "skill-hex" / "pkg-hex"
+    _make_sealed_tree(live1, "old-runtime")
+    recheck1 = _build_home_entry_recheck(
+        project1,
+        home1,
+        target_class="80-removal",
+        identifier="runtime/writer/pkg",
+        live=live1,
+        desired=None,
+        expected_digest=digest_path(live1),
+    )
+
+    def crash_after_thaw(point: str, _target: JournalTarget | None) -> None:
+        if point == "after_rename_thaw":
+            raise SimulatedCrash(point)
+
+    engine1 = TransactionEngine(home1, fault_hook=crash_after_thaw, pre_write_hook=hook)
+    with ManagerHomeLock(home1) as lock:
+        engine1.prepare(
+            lock,
+            _plan(
+                "txn-hook-tamper",
+                project1,
+                MutableTarget(
+                    target_class="80-removal",
+                    identifier="runtime/writer/pkg",
+                    live_path=live1,
+                    desired_path=None,
+                    expected_preimage_digest=digest_path(live1),
+                    kind="entry",
+                    publication_recheck=recheck1,
+                ),
+            ),
+        )
+        with pytest.raises(SimulatedCrash, match="after_rename_thaw"):
+            engine1.commit(lock, "txn-hook-tamper")
+
+    (live1 / "foreign").write_text("tampered", encoding="utf-8")
+    with (
+        ManagerHomeLock(home1) as lock,
+        pytest.raises(transactions.TransactionIncompleteError) as tamper_exc,
+    ):
+        TransactionEngine(home1, pre_write_hook=hook).recover(lock)
+    assert isinstance(tamper_exc.value.__cause__, SourceError)
+    assert tamper_exc.value.__cause__.code == CODE_OUTPUT_OVERLAP
+    assert (engine1.journal_root / "txn-hook-tamper.json").exists()
+    assert (live1 / "foreign").exists()
+
+    # Control 2: ancestor replaced with a symlink to a decoy dir before recovery refuses without chmodding the decoy.
+    project2 = tmp_path / "project2"
+    home2 = tmp_path / "home2"
+    live2 = home2 / "source-v1" / "runtime" / "skill-hex" / "pkg-hex"
+    _make_sealed_tree(live2, "old-runtime")
+    recheck2 = _build_home_entry_recheck(
+        project2,
+        home2,
+        target_class="80-removal",
+        identifier="runtime/writer/pkg",
+        live=live2,
+        desired=None,
+        expected_digest=digest_path(live2),
+    )
+
+    engine2 = TransactionEngine(home2, fault_hook=crash_after_thaw, pre_write_hook=hook)
+    with ManagerHomeLock(home2) as lock:
+        engine2.prepare(
+            lock,
+            _plan(
+                "txn-hook-ancestor-swap",
+                project2,
+                MutableTarget(
+                    target_class="80-removal",
+                    identifier="runtime/writer/pkg",
+                    live_path=live2,
+                    desired_path=None,
+                    expected_preimage_digest=digest_path(live2),
+                    kind="entry",
+                    publication_recheck=recheck2,
+                ),
+            ),
+        )
+        with pytest.raises(SimulatedCrash, match="after_rename_thaw"):
+            engine2.commit(lock, "txn-hook-ancestor-swap")
+
+    runtime_dir = home2 / "source-v1" / "runtime"
+    moved_real = tmp_path / "moved-real-runtime"
+    decoy_root = tmp_path / "decoy-runtime"
+    decoy_live = decoy_root / "skill-hex" / "pkg-hex"
+    _make_sealed_tree(decoy_live, "old-runtime")
+    decoy_live.chmod(0o755)
+    runtime_dir.rename(moved_real)
+    runtime_dir.symlink_to(decoy_root, target_is_directory=True)
+
+    chmod_calls: list[Path] = []
+    real_chmod = Path.chmod
+
+    def record_chmod(path: Path, mode: int, **kwargs: object) -> None:
+        chmod_calls.append(path)
+        real_chmod(path, mode, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "chmod", record_chmod)
+    try:
+        with (
+            ManagerHomeLock(home2) as lock,
+            pytest.raises(transactions.TransactionIncompleteError) as swap_exc,
+        ):
+            TransactionEngine(home2, pre_write_hook=hook).recover(lock)
+    finally:
+        monkeypatch.setattr(Path, "chmod", real_chmod)
+    assert isinstance(swap_exc.value.__cause__, SourceError)
+    assert swap_exc.value.__cause__.code == CODE_OUTPUT_OVERLAP
+    assert chmod_calls == []
+    _assert_mode_identity(decoy_live, 0o755)
+    assert (engine2.journal_root / "txn-hook-ancestor-swap.json").exists()

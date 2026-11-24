@@ -18,6 +18,7 @@ import unicodedata
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -179,6 +180,11 @@ class RenameThawRecord:
     original_mode: int
     thawed_mode: int
     expected_digest: str
+
+
+_ACTIVE_RENAME_THAW: ContextVar[tuple[JournalTarget, RenameThawRecord] | None] = (
+    ContextVar("_ACTIVE_RENAME_THAW", default=None)
+)
 
 
 @dataclass
@@ -717,7 +723,12 @@ class TransactionEngine:
         self._emit("before_cleanup", None)
         self._cleanup_committed(journal)
 
-    def _run_pre_write_hook(self, target: JournalTarget) -> None:
+    def _run_pre_write_hook(
+        self,
+        target: JournalTarget,
+        *,
+        active_thaw: RenameThawRecord | None = None,
+    ) -> None:
         """Run the publication recheck for one target about to be written.
 
         Targets without a payload proceed untouched, so callers that never
@@ -725,7 +736,11 @@ class TransactionEngine:
         installed hook fails closed before any write for the target. The
         hook also runs on crash replay, where live may already hold the
         desired bytes; the hook receives the whole target so it can
-        recognize both the planned preimage and the desired state.
+        recognize both the planned preimage and the desired state. When
+        ``active_thaw`` is provided, the hook runs with the active journaled
+        root-mode thaw in scope so boundary checks still enforce frozen
+        ancestors and tree contents without false-rejecting the temporary
+        owner-write bit.
         """
 
         if target.publication_recheck is None:
@@ -735,7 +750,14 @@ class TransactionEngine:
                 "publication recheck required but no hook is installed: "
                 f"{target.target_class}/{target.identifier}"
             )
-        self._pre_write_hook(target)
+        if active_thaw is None:
+            self._pre_write_hook(target)
+            return
+        token = _ACTIVE_RENAME_THAW.set((target, active_thaw))
+        try:
+            self._pre_write_hook(target)
+        finally:
+            _ACTIVE_RENAME_THAW.reset(token)
 
     def _hook_owned_live_digest(self, target: JournalTarget, live: Path) -> str:
         """Digest a hook-owned live destination, classifying failures.
@@ -1649,7 +1671,7 @@ class TransactionEngine:
             record.source_path == target.live_path
             or record.destination_path == target.live_path
         ):
-            self._run_pre_write_hook(target)
+            self._run_pre_write_hook(target, active_thaw=record)
         source_exists = _path_exists(source)
         destination_exists = _path_exists(destination)
         if source_exists and destination_exists:
@@ -1727,7 +1749,9 @@ class TransactionEngine:
             self._emit("after_rename_thaw", target)
             self._assert_mutation_witness()
             if run_pre_write_hook:
-                self._run_pre_write_hook(target)
+                self._run_pre_write_hook(
+                    target, active_thaw=journal.pending_rename_thaw
+                )
             try:
                 _native_rename_no_replace(source, destination)
             except Exception as retry_error:
@@ -2417,16 +2441,70 @@ def _target_digest(target: JournalTarget | MutableTarget, path: Path) -> str:
     return digest_target(path, kind=target.kind)
 
 
+def _target_digest_recognizing_thaw(
+    target: JournalTarget,
+    path: Path,
+) -> str:
+    """Digest a target path, accounting for an active journaled root-mode thaw.
+
+    Outside a pre-write hook invoked with an active ``RenameThawRecord``, this
+    delegates directly to ``_target_digest``. While the hook is running for an
+    active thaw whose source or destination is ``path``, and only when ``path``
+    is a real non-symlink directory carrying ``record.thawed_mode`` whose
+    content and child modes hash to ``record.expected_digest`` under
+    ``record.original_mode``, this returns ``record.expected_digest``. Any
+    other mode, link, or subtree change falls through to the real on-disk
+    digest so the boundary check refuses.
+    """
+    active = _ACTIVE_RENAME_THAW.get()
+    if active is not None and _shared_key(target) is None:
+        active_target, record = active
+        if (
+            active_target is target
+            and str(path) in {record.source_path, record.destination_path}
+        ):
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                return ABSENT_DIGEST
+            if (
+                stat.S_ISDIR(info.st_mode)
+                and not stat.S_ISLNK(info.st_mode)
+                and _permission_identity(info)
+                == _permission_mode_identity(record.thawed_mode)
+            ):
+                restored_digest = _digest_path(
+                    path,
+                    root_mode_override=record.original_mode,
+                )
+                if restored_digest == record.expected_digest:
+                    return restored_digest
+    return _target_digest(target, path)
+
+
 def digest_path(path: Path) -> str:
+    return _digest_path(path)
+
+
+def _digest_path(
+    path: Path,
+    *,
+    root_mode_override: int | None = None,
+) -> str:
     try:
         info = path.lstat()
     except FileNotFoundError:
         return ABSENT_DIGEST
     digest = hashlib.sha256(_DIGEST_DOMAIN)
-    if stat.S_ISREG(info.st_mode):
+    if stat.S_ISREG(info.st_mode) and root_mode_override is None:
         _digest_file(digest, path, "", info)
-    elif stat.S_ISDIR(info.st_mode) and not path.is_symlink():
-        _write_digest_entry(digest, b"d", "", _permission_identity(info), 0)
+    elif stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+        root_mode = (
+            _permission_identity(info)
+            if root_mode_override is None
+            else _permission_mode_identity(root_mode_override)
+        )
+        _write_digest_entry(digest, b"d", "", root_mode, 0)
         entries = sorted(
             (entry for entry in path.rglob("*")),
             key=lambda entry: _utf8_key(entry.relative_to(path).as_posix()),
@@ -2965,7 +3043,20 @@ def _remove_path(path: Path) -> None:
         info = path.lstat()
     except FileNotFoundError:
         return
-    if stat.S_ISDIR(info.st_mode) and not path.is_symlink():
+    if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+        if not _is_windows():
+            # Private staged copies of sealed runtime trees may carry 0555
+            # directories; grant owner rwx top-down on real directories only.
+            for directory, dirnames, _filenames in os.walk(path, topdown=True, followlinks=False):
+                current = Path(directory)
+                current_info = current.lstat()
+                if stat.S_ISDIR(current_info.st_mode) and not stat.S_ISLNK(current_info.st_mode):
+                    current.chmod(stat.S_IMODE(current_info.st_mode) | stat.S_IRWXU)
+                dirnames[:] = [
+                    name
+                    for name in dirnames
+                    if not (current / name).is_symlink()
+                ]
         shutil.rmtree(path)
     else:
         path.unlink()
