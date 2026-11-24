@@ -660,7 +660,9 @@ def test_cli_project_add_rejects_invalid_alias_and_missing_path_preserving_confi
     rc_alias = cli.main(["project", "add", "my app", str(existing)])
     err_alias = capsys.readouterr().err
     assert rc_alias != 0
+    assert "refusing to add project" in err_alias
     assert "portable identifier" in err_alias
+    assert str(cfg_path) not in err_alias
     assert cfg_path.read_bytes() == before
     assert not (existing / "Skillfile.json").exists()
 
@@ -739,7 +741,23 @@ def test_other_config_mutators_validate_before_writing(tmp_path, monkeypatch, ca
     assert rc_https != 0
     assert cfg_path.read_bytes() == before
 
-    # build-https login rejects oversized username before storing token or writing config.
+    # build-https login rejects oversized username before prompting, storing token, or writing config.
+    from csk import build_https
+    import getpass
+
+    helper_calls: list[str] = []
+    monkeypatch.setattr(
+        getpass, "getpass", lambda *_a, **_k: helper_calls.append("getpass") or "secret"
+    )
+    monkeypatch.setattr(
+        build_https, "store_namespaced_token", lambda *_a, **_k: helper_calls.append("store")
+    )
+    monkeypatch.setattr(
+        build_https, "read_namespaced_token", lambda *_a, **_k: helper_calls.append("read") or None
+    )
+    monkeypatch.setattr(
+        build_https, "delete_namespaced_token", lambda *_a, **_k: helper_calls.append("delete")
+    )
     rc_login = cli.main(
         [
             "config",
@@ -752,4 +770,86 @@ def test_other_config_mutators_validate_before_writing(tmp_path, monkeypatch, ca
     )
     capsys.readouterr()
     assert rc_login != 0
+    assert helper_calls == []
+    assert cfg_path.read_bytes() == before
+
+
+def test_cli_build_https_remove_repair_deletes_stored_token_and_preserves_strict_load(
+    tmp_path, monkeypatch, capsys
+):
+    # Repair-removing a broken build-https keyring scope deletes its stored token and restores a loadable config; broken config outside build_https refuses without touching token or disk.
+    from csk import build_https, cli
+
+    cfg_path = _write_valid_config(tmp_path, monkeypatch)
+    raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw["build_https"] = {
+        "gitlab.example.com": {"token": "keyring", "username": "u" * 4097}
+    }
+    cfg_path.write_text(json.dumps(raw, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(config.ConfigError):
+        config.load_config(cfg_path)
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        build_https,
+        "read_namespaced_token",
+        lambda scope, *_a, **_k: calls.append(("read", scope)) or "stored-secret",
+    )
+    monkeypatch.setattr(
+        build_https,
+        "delete_namespaced_token",
+        lambda scope, *_a, **_k: calls.append(("delete", scope)),
+    )
+
+    assert cli.main(["config", "build-https", "remove", "gitlab.example.com"]) == 0
+    out = capsys.readouterr().out
+    assert "Removed build-https scope gitlab.example.com and its stored token" in out
+    assert calls == [("read", "gitlab.example.com"), ("delete", "gitlab.example.com")]
+    assert config.load_config(cfg_path).build_https == ()
+
+    # Negative control: broken config outside build_https refuses without calling credential helper or modifying disk.
+    calls.clear()
+    raw_bad = json.loads(cfg_path.read_text(encoding="utf-8"))
+    raw_bad["build_https"] = {
+        "gitlab.example.com": {"token": "keyring", "username": "u" * 4097}
+    }
+    raw_bad["projects"] = {"my app": {"path": str(tmp_path)}}
+    cfg_path.write_text(json.dumps(raw_bad, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    before_bad = cfg_path.read_bytes()
+    assert cli.main(["config", "build-https", "remove", "gitlab.example.com"]) == cli.EXIT_CONFIG
+    capsys.readouterr()
+    assert calls == []
+    assert cfg_path.read_bytes() == before_bad
+
+
+@pytest.mark.parametrize("name,branch", [("_tools", None), ("p" * 110, "feature/x")])
+def test_unregistered_cwd_install_allows_non_portable_derived_alias(
+    tmp_path, monkeypatch, capsys, name, branch
+):
+    # In-memory cwd project registration is never persisted, so csk install inside an unregistered directory with a non-portable derived alias succeeds without blaming config.json.
+    import subprocess
+    from conftest import make_project, make_skill_repo, write_skillfile
+    from csk import cli
+
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    make_skill_repo(skills_root, "skill-a", tag="v1")
+    project = make_project(tmp_path, name)
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-a", "tag": "v1"}]})
+    if branch is not None:
+        subprocess.run(["git", "checkout", "-q", "-b", branch], cwd=project, check=True)
+    home = tmp_path / "home"
+    home.mkdir()
+    cfg_path = home / "config.json"
+    cfg_path.write_text(
+        json.dumps({"schema_version": 1, "skills_root": str(skills_root), "projects": {}}),
+        encoding="utf-8",
+    )
+    before = cfg_path.read_bytes()
+    monkeypatch.setenv("CSK_CONFIG", str(cfg_path))
+    monkeypatch.chdir(project)
+    rc = cli.main(["install"])
+    captured = capsys.readouterr()
+    assert rc == 0, f"install failed:\nSTDOUT:\n{captured.out}\nSTDERR:\n{captured.err}"
     assert cfg_path.read_bytes() == before

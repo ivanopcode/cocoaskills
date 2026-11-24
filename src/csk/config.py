@@ -709,9 +709,7 @@ def add_project(
     )
     # dataclasses.replace keeps every other field, so a new config field can
     # never be silently dropped by project registration again.
-    updated = dataclasses.replace(config, projects=projects)
-    validate_config(updated)
-    return updated
+    return dataclasses.replace(config, projects=projects)
 
 
 def validate_skills_root_for_work(config: GlobalConfig) -> None:

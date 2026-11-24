@@ -35,6 +35,7 @@ from . import (
     gitignore_gate,
     global_install,
     hybrid,
+    identifiers,
     installer,
     mcp_declarations,
     mcp_command_resolution,
@@ -1569,6 +1570,23 @@ def _cmd_config_build_ssh(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _remove_build_https_scope_token(scope: str) -> bool:
+    # "git credential reject" exits 0 whether or not an entry existed, so
+    # callers only claim a token removal after a read proved one.
+    try:
+        build_ssh.validate_scope(scope)
+    except build_ssh.BuildSSHError:
+        return False
+    host = build_https.scope_host(scope)
+    home = build_https.resolve_operator_home()
+    had_token = (
+        build_https.read_namespaced_token(scope, host, git=resolve_tool("git"), home=home)
+        is not None
+    )
+    build_https.delete_namespaced_token(scope, host, git=resolve_tool("git"), home=home)
+    return had_token
+
+
 def _cmd_config_build_https(args: argparse.Namespace) -> int:
     if args.build_https_command == "remove":
         try:
@@ -1579,7 +1597,11 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
             )
             if not repaired:
                 raise load_exc
-            print(f"Removed build-https scope {terminal_text(args.scope)}")
+            had_token = _remove_build_https_scope_token(args.scope)
+            if had_token:
+                print(f"Removed build-https scope {terminal_text(args.scope)} and its stored token")
+            else:
+                print(f"Removed build-https scope {terminal_text(args.scope)}")
             if remaining_warning:
                 print(f"warning: {terminal_text(remaining_warning)}", file=sys.stderr)
             return EXIT_OK
@@ -1590,15 +1612,7 @@ def _cmd_config_build_https(args: argparse.Namespace) -> int:
             print(f"No build-https scope {terminal_text(args.scope)!r}", file=sys.stderr)
             return EXIT_CONFIG
         config.save_config(replace(cfg, build_https=remaining))
-        # "git credential reject" exits 0 whether or not an entry existed, so
-        # the message only claims a token removal after a read proved one.
-        host = build_https.scope_host(args.scope)
-        home = build_https.resolve_operator_home()
-        had_token = (
-            build_https.read_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
-            is not None
-        )
-        build_https.delete_namespaced_token(args.scope, host, git=resolve_tool("git"), home=home)
+        had_token = _remove_build_https_scope_token(args.scope)
         if had_token:
             print(f"Removed build-https scope {terminal_text(args.scope)} and its stored token")
         else:
@@ -1702,7 +1716,15 @@ def _cmd_project_add(alias: str, path: Path) -> int:
             file=sys.stderr,
         )
         return EXIT_CONFIG
+    if not identifiers.is_valid_identifier(alias):
+        print(
+            f"error: refusing to add project {terminal_text(alias)!r}: "
+            "alias must be a portable identifier",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
     updated = config.add_project(cfg, alias, path)
+    config.validate_config(updated)
     manifest.require_project_dir(project_root)
     skillfile_deprecations.check_path(project_root / "Skillfile.json")
     manifest.ensure_project_manifest(project_root, alias=alias, agents=cfg.default_agents)
