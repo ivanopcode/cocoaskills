@@ -836,3 +836,63 @@ def test_inspect_bin_shim_round_trips_prefix_and_suffix(tmp_path, platform_name)
         bin_dir, "tool", target, platform_name=platform_name,
         path_entries=(prefix, suffix), path_suffix=(),
     ) is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Creates POSIX directory symlinks")
+def test_remove_stale_shims_refuses_symlinked_and_non_dir_bin_preserving_foreign_files(tmp_path):
+    # Shim cleanup and writes refuse symlinked or non-directory bin paths (and symlinked .agents/global parents) without deleting foreign files in the target, while a real bin dir removes stale shims and keeps expected ones.
+    userbin = tmp_path / "userbin"
+    userbin.mkdir()
+    foreign = userbin / "my-tool"
+    foreign.write_text("#!/bin/sh\necho keep\n", encoding="utf-8")
+
+    # Project symlinked .agents/bin
+    project = tmp_path / "project"
+    (project / ".agents").mkdir(parents=True)
+    (project / ".agents" / "bin").symlink_to(userbin, target_is_directory=True)
+    with pytest.raises(shims.ShimError, match="is a link"):
+        shims.remove_stale_shims(project, set())
+    assert foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho keep\n"
+
+    # Global symlinked global/bin
+    csk_home = tmp_path / "csk_home"
+    (csk_home / "global").mkdir(parents=True)
+    (csk_home / "global" / "bin").symlink_to(userbin, target_is_directory=True)
+    with pytest.raises(shims.ShimError, match="is a link"):
+        shims.remove_stale_global_shims(csk_home, set())
+    assert foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho keep\n"
+
+    # Symlinked .agents parent pointing to a dir with a real bin/ child
+    outer = tmp_path / "outer"
+    (outer / "bin").mkdir(parents=True)
+    outer_foreign = outer / "bin" / "keep-me"
+    outer_foreign.write_text("keep", encoding="utf-8")
+    linked_parent_proj = tmp_path / "linked-parent-proj"
+    linked_parent_proj.mkdir()
+    (linked_parent_proj / ".agents").symlink_to(outer, target_is_directory=True)
+    with pytest.raises(shims.ShimError, match="is a link"):
+        shims.remove_stale_shims(linked_parent_proj, set())
+    assert outer_foreign.read_text(encoding="utf-8") == "keep"
+
+    # write_bin_shim also refuses a symlinked bin_dir
+    runtime = tmp_path / "runtime" / "tool"
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text("#!/bin/sh\n", encoding="utf-8")
+    with pytest.raises(shims.ShimError, match="is a link"):
+        shims.write_bin_shim(project / ".agents" / "bin", "my-tool", runtime, platform_name="unix")
+    assert foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho keep\n"
+
+    # Non-directory regular file at bin_dir refuses cleanly
+    not_a_dir = tmp_path / "not-a-dir"
+    not_a_dir.write_text("file", encoding="utf-8")
+    with pytest.raises(shims.ShimError, match="not a real directory"):
+        shims.remove_stale_shims_in(not_a_dir, set())
+    assert not_a_dir.read_text(encoding="utf-8") == "file"
+
+    # Positive control: real bin directory removes stale shim and preserves active shim
+    real_project = tmp_path / "real-project"
+    shims.write_project_shim(real_project, "keep-tool", runtime, platform_name="unix")
+    shims.write_project_shim(real_project, "stale-tool", runtime, platform_name="unix")
+    shims.remove_stale_shims(real_project, {"keep-tool"}, platform_name="unix")
+    assert (real_project / ".agents" / "bin" / "keep-tool").is_symlink()
+    assert not (real_project / ".agents" / "bin" / "stale-tool").exists()

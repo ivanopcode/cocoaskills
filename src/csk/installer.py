@@ -2807,6 +2807,16 @@ def _materialization_targets(
     hybrid_skills = hybrid.hybrid_skills_root(home)
     runtime_root = home / "runtime"
     project_bin = project_root / ".agents" / "bin"
+    shims.require_real_managed_dir(
+        project_root / ".agents",
+        label="Managed directory",
+        allow_missing=True,
+    )
+    shims.require_real_managed_dir(
+        home / "hybrid",
+        label="Managed directory",
+        allow_missing=True,
+    )
     targets: list[_MaterializationTarget] = []
 
     project_names = {
@@ -2870,7 +2880,11 @@ def _materialization_targets(
         nodes,
         all_hybrid_names | hybrid_store_names,
     )
-    if runtime_root.exists():
+    if shims.require_real_managed_dir(
+        runtime_root,
+        label="Runtime directory",
+        allow_missing=True,
+    ):
         for skill_dir in runtime_root.iterdir():
             if not skill_dir.is_dir() or skill_dir.is_symlink():
                 continue
@@ -2911,10 +2925,17 @@ def _materialization_targets(
                 kind="entry",
             )
         )
-    if project_bin.exists():
+    if shims.require_real_managed_dir(project_bin, allow_missing=True):
         for child in project_bin.iterdir():
+            try:
+                child_info = child.lstat()
+            except FileNotFoundError:
+                continue
             if (
-                (child.is_file() or child.is_symlink())
+                (
+                    stat.S_ISREG(child_info.st_mode)
+                    or stat.S_ISLNK(child_info.st_mode)
+                )
                 and child not in expected_shims
             ):
                 targets.append(
@@ -2996,9 +3017,17 @@ def _stale_entry_targets(
     identifier_prefix: str,
 ) -> list[_MaterializationTarget]:
     targets: list[_MaterializationTarget] = []
-    if not root.exists():
+    if not shims.require_real_managed_dir(
+        root,
+        label="Managed directory",
+        allow_missing=True,
+    ):
         return targets
     for child in root.iterdir():
+        try:
+            child_info = child.lstat()
+        except FileNotFoundError:
+            continue
         if child.name.startswith("."):
             if _is_dead_install_orphan(child):
                 targets.append(
@@ -3014,7 +3043,9 @@ def _stale_entry_targets(
             continue
         if child.name in expected:
             continue
-        if not child.is_dir() and not child.is_symlink():
+        if not stat.S_ISDIR(child_info.st_mode) and not stat.S_ISLNK(
+            child_info.st_mode
+        ):
             continue
         targets.append(
             _MaterializationTarget(
@@ -3577,6 +3608,11 @@ def _commit_transaction_targets(
     try:
         for committed_target in targets:
             if committed_target.desired_path is None:
+                shims.require_real_managed_dir(
+                    committed_target.live_path.parent,
+                    label="Materialization parent",
+                    allow_missing=True,
+                )
                 continue
             created.extend(
                 _make_missing_directories(
@@ -5143,19 +5179,34 @@ def _replace_dir(new_dir: Path, target: Path) -> None:
 
 
 def _cleanup_removed_skills(project_root: Path, expected: set[str]) -> None:
+    if not shims.require_real_managed_dir(
+        project_root / ".agents",
+        label="Managed directory",
+        allow_missing=True,
+    ):
+        return
     _cleanup_removed_skills_root(project_root / ".agents" / "skills", expected)
 
 
 def _cleanup_removed_skills_root(skills_root: Path, expected: set[str]) -> None:
-    if not skills_root.exists():
+    if not shims.require_real_managed_dir(
+        skills_root,
+        label="Managed directory",
+        allow_missing=True,
+    ):
         return
     for child in skills_root.iterdir():
-        if not child.is_dir() and not child.is_symlink():
+        try:
+            child_info = child.lstat()
+        except FileNotFoundError:
+            continue
+        is_link = stat.S_ISLNK(child_info.st_mode)
+        if not stat.S_ISDIR(child_info.st_mode) and not is_link:
             continue
         if child.name.startswith("."):
             continue
         if child.name not in expected:
-            if child.is_symlink():
+            if is_link:
                 child.unlink()
             else:
                 shutil.rmtree(child)

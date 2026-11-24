@@ -5,6 +5,7 @@ from .terminal import terminal_text
 import json
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import ExitStack
@@ -296,9 +297,14 @@ def init(csk_home: Path, *, default_agents: list[str] | None = None) -> Path:
     path = global_skillfile(csk_home)
     skillfile_deprecations.check_path(path)
     root = global_root(csk_home)
+    skills = global_skills_root(csk_home)
+    bin_dir = global_bin_dir(csk_home)
+    shims.require_real_managed_dir(root, label="Global directory", allow_missing=True)
+    shims.require_real_managed_dir(skills, label="Global skills directory", allow_missing=True)
+    shims.require_real_managed_dir(bin_dir, allow_missing=True)
     root.mkdir(parents=True, exist_ok=True)
-    global_skills_root(csk_home).mkdir(parents=True, exist_ok=True)
-    global_bin_dir(csk_home).mkdir(parents=True, exist_ok=True)
+    skills.mkdir(parents=True, exist_ok=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
     env_files.write_global_env_files(csk_home)
     if not path.exists():
         agents = list(default_agents or DEFAULT_AGENTS)
@@ -728,6 +734,11 @@ def _global_materialization_targets(
     skills_root = global_skills_root(csk_home)
     runtime_root = csk_home / "runtime"
     bin_dir = global_bin_dir(csk_home)
+    shims.require_real_managed_dir(
+        global_root(csk_home),
+        label="Global directory",
+        allow_missing=True,
+    )
     targets: list[installer._MaterializationTarget] = []
     expected_names = {node.name for node in nodes}
 
@@ -766,7 +777,11 @@ def _global_materialization_targets(
         nodes,
         retained=retained,
     )
-    if runtime_root.exists():
+    if shims.require_real_managed_dir(
+        runtime_root,
+        label="Runtime directory",
+        allow_missing=True,
+    ):
         for skill_dir in runtime_root.iterdir():
             if not skill_dir.is_dir() or skill_dir.is_symlink():
                 continue
@@ -800,10 +815,17 @@ def _global_materialization_targets(
                 kind="entry",
             )
         )
-    if bin_dir.exists():
+    if shims.require_real_managed_dir(bin_dir, allow_missing=True):
         for child in bin_dir.iterdir():
+            try:
+                child_info = child.lstat()
+            except FileNotFoundError:
+                continue
             if (
-                (child.is_file() or child.is_symlink())
+                (
+                    stat.S_ISREG(child_info.st_mode)
+                    or stat.S_ISLNK(child_info.st_mode)
+                )
                 and child not in expected_shims
             ):
                 targets.append(
@@ -1324,7 +1346,11 @@ def _prune_staged_global_runtime(
         nodes,
         retained=retained,
     )
-    if not staged_runtime.exists():
+    if not shims.require_real_managed_dir(
+        staged_runtime,
+        label="Runtime directory",
+        allow_missing=True,
+    ):
         return
     for skill_dir in list(staged_runtime.iterdir()):
         if not skill_dir.is_dir() or skill_dir.is_symlink():

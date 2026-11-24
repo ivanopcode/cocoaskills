@@ -84,6 +84,33 @@ def warn_unknown_agents(agents: list[str]) -> None:
         )
 
 
+def _require_real_directory(path: Path) -> bool:
+    """Return True if ``path`` exists as a real directory, False if absent; refuse links/non-dirs."""
+
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise AdapterError(f"Adapter directory {path} cannot be inspected: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise AdapterError(
+            f"Adapter directory {path} is a link; newly introduced links are never followed"
+        )
+    if not stat.S_ISDIR(info.st_mode):
+        raise AdapterError(f"Adapter directory {path} is not a real directory")
+    return True
+
+
+def _require_real_adapter_root(base: Path, relative: str) -> Path:
+    current = base
+    for part in Path(relative).parts:
+        current = current / part
+        if not _require_real_directory(current):
+            break
+    return base / relative
+
+
 def refresh_adapters(project_root: Path, agents: list[str], skill_names: list[str], mode: str) -> None:
     refresh_adapter_groups(project_root, agents, [(project_root / ".agents" / "skills", skill_names)], mode)
 
@@ -101,8 +128,9 @@ def refresh_adapter_groups(
     """
     warn_unknown_agents(agents)
     adapter_roots = {
-        agent: project_root / rel
+        agent: _require_real_adapter_root(project_root, rel)
         for agent, rel in AGENT_PATHS.items()
+        if agent in agents
     }
     _refresh_adapter_groups(adapter_roots, agents, groups, mode)
 
@@ -118,11 +146,15 @@ def refresh_global_adapters(
     canonical_root = csk_home / "global" / "skills"
     user_home = home or Path.home()
     adapter_roots = {
-        agent: user_home / rel
+        agent: _require_real_adapter_root(user_home, rel)
         for agent, rel in AGENT_PATHS.items()
+        if agent in agents
     }
     for agent in NATIVE_DISCOVERY_AGENTS:
-        adapter_roots[agent] = user_home / NATIVE_DISCOVERY_HOME_PATH
+        if agent in agents:
+            adapter_roots[agent] = _require_real_adapter_root(
+                user_home, NATIVE_DISCOVERY_HOME_PATH
+            )
     _refresh_adapters(canonical_root, adapter_roots, agents, skill_names, mode)
 
 
@@ -149,6 +181,7 @@ def _refresh_adapter_groups(
         adapter_root = adapter_roots.get(agent)
         if adapter_root is None:
             continue
+        _require_real_directory(adapter_root)
         adapter_root.mkdir(parents=True, exist_ok=True)
         managed = _read_managed(adapter_root)
         for name in managed - expected:
@@ -195,7 +228,7 @@ def plan_project_adapter_targets(
     groups: list[AdapterGroup],
 ) -> tuple[AdapterTarget, ...]:
     roots = {
-        agent: project_root / relative
+        agent: _require_real_adapter_root(project_root, relative)
         for agent, relative in AGENT_PATHS.items()
         if agent in agents
     }
@@ -212,12 +245,14 @@ def plan_global_adapter_targets(
     canonical_root = csk_home / "global" / "skills"
     user_home = home or Path.home()
     roots = {
-        agent: user_home / relative
+        agent: _require_real_adapter_root(user_home, relative)
         for agent, relative in AGENT_PATHS.items()
         if agent in agents
     }
     if any(agent in NATIVE_DISCOVERY_AGENTS for agent in agents):
-        roots["native"] = user_home / NATIVE_DISCOVERY_HOME_PATH
+        roots["native"] = _require_real_adapter_root(
+            user_home, NATIVE_DISCOVERY_HOME_PATH
+        )
     return _plan_adapter_targets(
         roots,
         [
@@ -245,6 +280,7 @@ def _plan_adapter_targets(
     targets: list[AdapterTarget] = []
     for root_identity in sorted(roots):
         adapter_root = roots[root_identity]
+        _require_real_directory(adapter_root)
         root_key = hashlib.sha256(
             str(adapter_root.absolute()).encode("utf-8")
         ).hexdigest()
@@ -418,10 +454,14 @@ def _link_probe(directory: Path) -> bool:
 
 
 def _remove_path(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.exists():
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode):
         shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _read_managed(adapter_root: Path) -> set[str]:

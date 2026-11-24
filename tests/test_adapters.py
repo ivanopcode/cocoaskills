@@ -175,3 +175,51 @@ def test_transaction_auto_mode_rejects_cross_device_staging_without_probe(
         live_root / ".claude",
         live_directory,
     ]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Creates POSIX directory symlinks")
+def test_adapters_refuse_symlinked_adapter_root_and_parent_without_deleting_target(tmp_path):
+    # Adapter refresh and planning refuse symlinked adapter roots or relative parents without deleting entries inside the target, while a real adapter root removes stale managed entries and preserves unmanaged files.
+    outside = tmp_path / "outside-skills"
+    (outside / "old-skill").mkdir(parents=True)
+    (outside / "old-skill" / "SKILL.md").write_text("keep", encoding="utf-8")
+    (outside / ".csk-managed.json").write_text(
+        '{"entries": ["old-skill"], "schema_version": 1}\n',
+        encoding="utf-8",
+    )
+
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    (project / ".claude" / "skills").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(adapters.AdapterError, match="is a link"):
+        adapters.refresh_adapters(project, ["claude_code"], [], "copy")
+    with pytest.raises(adapters.AdapterError, match="is a link"):
+        adapters.plan_project_adapter_targets(project, ["claude_code"], [])
+    assert (outside / "old-skill" / "SKILL.md").read_text(encoding="utf-8") == "keep"
+
+    # Symlinked relative parent (.claude -> outer) also refuses
+    outer_parent = tmp_path / "outer-parent"
+    (outer_parent / "skills" / "old-skill").mkdir(parents=True)
+    (outer_parent / "skills" / "old-skill" / "SKILL.md").write_text("keep-parent", encoding="utf-8")
+    (outer_parent / "skills" / ".csk-managed.json").write_text(
+        '{"entries": ["old-skill"], "schema_version": 1}\n',
+        encoding="utf-8",
+    )
+    project2 = tmp_path / "project2"
+    project2.mkdir()
+    (project2 / ".claude").symlink_to(outer_parent, target_is_directory=True)
+    with pytest.raises(adapters.AdapterError, match="is a link"):
+        adapters.refresh_adapters(project2, ["claude_code"], [], "copy")
+    assert (outer_parent / "skills" / "old-skill" / "SKILL.md").read_text(encoding="utf-8") == "keep-parent"
+
+    # Positive control: real adapter directory removes stale managed entry and keeps unmanaged file
+    real_project = tmp_path / "real-project"
+    canonical = real_project / ".agents" / "skills" / "skill-a"
+    canonical.mkdir(parents=True)
+    (canonical / "SKILL.md").write_text("managed", encoding="utf-8")
+    adapters.refresh_adapters(real_project, ["claude_code"], ["skill-a"], "copy")
+    (real_project / ".claude" / "skills" / "manual.txt").write_text("user", encoding="utf-8")
+    adapters.refresh_adapters(real_project, ["claude_code"], [], "copy")
+    assert not (real_project / ".claude" / "skills" / "skill-a").exists()
+    assert (real_project / ".claude" / "skills" / "manual.txt").read_text(encoding="utf-8") == "user"

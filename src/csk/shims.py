@@ -575,6 +575,53 @@ def select_external_build_activation_v3(
     )
 
 
+def require_real_managed_dir(
+    path: Path,
+    *,
+    label: str = "Command directory",
+    allow_missing: bool = True,
+) -> bool:
+    """Verify ``path`` is a real directory, refusing symlinks and non-directories.
+
+    Returns ``True`` when ``path`` exists as a real directory and ``False`` when
+    it is absent and ``allow_missing`` is true. Raises :class:`ShimError` if
+    ``path`` is a symbolic link, not a directory, or cannot be inspected.
+    """
+
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        if allow_missing:
+            return False
+        raise ShimError(f"{label} does not exist: {path}") from exc
+    except OSError as exc:
+        raise ShimError(f"{label} {path} cannot be inspected: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
+        raise ShimError(
+            f"{label} {path} is a link; newly introduced links are never followed"
+        )
+    if not stat.S_ISDIR(info.st_mode):
+        raise ShimError(f"{label} {path} is not a real directory")
+    return True
+
+
+def _require_managed_chain(
+    base: Path,
+    parts: tuple[str, ...],
+    *,
+    label: str = "Command directory",
+) -> bool:
+    """Verify every existing managed component under ``base`` is a real directory."""
+
+    current = base
+    for index, part in enumerate(parts):
+        current = current / part
+        part_label = label if index == len(parts) - 1 else "Managed directory"
+        if not require_real_managed_dir(current, label=part_label, allow_missing=True):
+            return False
+    return True
+
+
 def project_bin_dir(project_root: Path) -> Path:
     return project_root / ".agents" / "bin"
 
@@ -602,6 +649,7 @@ def write_project_shim(
     path_entries: tuple[Path, ...] = (),
     path_suffix: tuple[Path, ...] = (),
 ) -> Path:
+    _require_managed_chain(project_root, (".agents", "bin"))
     return write_bin_shim(
         project_bin_dir(project_root),
         command_name,
@@ -621,6 +669,7 @@ def write_global_shim(
     path_entries: tuple[Path, ...] = (),
     path_suffix: tuple[Path, ...] = (),
 ) -> Path:
+    _require_managed_chain(csk_home, ("global", "bin"))
     return write_bin_shim(
         global_bin_dir(csk_home),
         command_name,
@@ -639,6 +688,7 @@ def write_project_build_shim(
     path_entries: tuple[Path, ...] = (),
     path_suffix: tuple[Path, ...] = (),
 ) -> Path:
+    _require_managed_chain(project_root, (".agents", "bin"))
     return activate_build_command(
         project_bin_dir(project_root),
         activation,
@@ -656,6 +706,7 @@ def write_global_build_shim(
     path_entries: tuple[Path, ...] = (),
     path_suffix: tuple[Path, ...] = (),
 ) -> Path:
+    _require_managed_chain(csk_home, ("global", "bin"))
     return activate_build_command(
         global_bin_dir(csk_home),
         activation,
@@ -711,6 +762,16 @@ def inspect_bin_shim(
     )
     entries = _require_path_entries(path_entries, platform=platform)
     suffix = _require_path_entries(path_suffix, platform=platform)
+    try:
+        bin_info = bin_dir.lstat()
+    except FileNotFoundError:
+        return f"managed launcher is missing: {shim}"
+    except OSError as exc:
+        return f"managed launcher directory cannot be inspected: {bin_dir}: {exc}"
+    if stat.S_ISLNK(bin_info.st_mode):
+        return f"managed launcher directory is a symbolic link: {bin_dir}"
+    if not stat.S_ISDIR(bin_info.st_mode):
+        return f"managed launcher directory is not a real directory: {bin_dir}"
     try:
         before = shim.lstat()
     except FileNotFoundError:
@@ -782,7 +843,8 @@ def write_bin_shim(
     )
     entries = _require_path_entries(path_entries, platform=platform)
     suffix = _require_path_entries(path_suffix, platform=platform)
-    bin_dir.mkdir(parents=True, exist_ok=True)
+    if not require_real_managed_dir(bin_dir, allow_missing=True):
+        bin_dir.mkdir(parents=True, exist_ok=True)
     _clear_shim(shim)
     # Both launchers carry explicit line endings, so newline translation is
     # disabled: a Windows host would otherwise write CR CR LF into a .cmd.
@@ -803,6 +865,8 @@ def remove_stale_shims(
     *,
     platform_name: str | None = None,
 ) -> None:
+    if not _require_managed_chain(project_root, (".agents", "bin")):
+        return
     remove_stale_shims_in(project_bin_dir(project_root), expected_commands, platform_name=platform_name)
 
 
@@ -812,6 +876,8 @@ def remove_stale_global_shims(
     *,
     platform_name: str | None = None,
 ) -> None:
+    if not _require_managed_chain(csk_home, ("global", "bin")):
+        return
     remove_stale_shims_in(global_bin_dir(csk_home), expected_commands, platform_name=platform_name)
 
 
@@ -824,14 +890,22 @@ def remove_stale_shims_in(
     """Remove every launcher in a bin directory that no active command owns.
 
     Script and compiled commands are indistinguishable here on purpose: one
-    name owns one launcher path, whatever produced it.
+    name owns one launcher path, whatever produced it. Refuses if ``bin_dir``
+    is a symbolic link or not a real directory so files outside the managed
+    bin directory are never deleted through a link.
     """
 
     platform = _resolve_platform(platform_name)
-    if not bin_dir.exists():
+    if not require_real_managed_dir(bin_dir, allow_missing=True):
         return
     for child in bin_dir.iterdir():
-        if not child.is_file() and not child.is_symlink():
+        try:
+            child_info = child.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ShimError(f"Command directory entry {child} cannot be inspected: {exc}") from exc
+        if not stat.S_ISREG(child_info.st_mode) and not stat.S_ISLNK(child_info.st_mode):
             continue
         if _shim_command_name(child, expected_commands, platform=platform) is None:
             child.unlink()
@@ -1104,13 +1178,18 @@ def _escape_cmd_value(value: str) -> str:
 
 
 def _clear_shim(shim: Path) -> None:
-    if shim.is_symlink():
+    try:
+        info = shim.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ShimError(f"Launcher path {shim} cannot be inspected: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode):
         shim.unlink()
         return
-    if shim.is_dir():
+    if stat.S_ISDIR(info.st_mode):
         raise ShimError(f"Launcher path is a directory: {shim}")
-    if shim.exists():
-        shim.unlink()
+    shim.unlink()
 
 
 def _grant_execute(path: Path) -> None:

@@ -1985,3 +1985,136 @@ def test_global_status_attributes_missing_sibling(tmp_path, skills_root, csk_hom
     assert "absent" in payload[0]["skills"][1]["detail"]
     _save_config(monkeypatch, cfg)
     assert cli.main(["global", "status", "--check"]) == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Creates POSIX directory symlinks")
+def test_project_and_global_cli_install_refuse_symlinked_bin_preserving_foreign_files(
+    monkeypatch, tmp_path, skills_root, csk_home, capsys
+):
+    # Public `csk install` (project) and `csk global install` (global) refuse when .agents/bin or global/bin is a symlink, preserving foreign files inside the link target; in real bin directories both succeed and remove stale shims.
+    make_skill_repo(
+        skills_root,
+        "skill-tool",
+        {
+            "csk-skill.json": json.dumps(
+                {
+                    "schema_version": 1,
+                    "commands": {"tool": {"type": "script", "unix_path": "scripts/tool"}},
+                }
+            ),
+            "scripts/tool": "#!/bin/sh\necho ok\n",
+        },
+        tag="v1",
+    )
+
+    project = make_project(tmp_path, "proj-linked-bin")
+    write_skillfile(project, {"schema_version": 1, "skills": []})
+    cfg = make_config(csk_home, skills_root, project, agents=["codex_cli"])
+    _save_config(monkeypatch, cfg)
+
+    proj_userbin = tmp_path / "proj-userbin"
+    proj_userbin.mkdir()
+    proj_foreign = proj_userbin / "my-tool"
+    proj_foreign.write_text("#!/bin/sh\necho user-proj\n", encoding="utf-8")
+    (project / ".agents").mkdir(parents=True)
+    (project / ".agents" / "bin").symlink_to(proj_userbin, target_is_directory=True)
+
+    # Project public CLI install with empty skill list (would trigger 80-removal) refuses.
+    rc = cli.main(["install", str(project)])
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert "is a link" in err
+    assert proj_foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho user-proj\n"
+
+    # Project public CLI install with an active command also refuses without touching userbin.
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-tool", "tag": "v1"}]})
+    rc = cli.main(["install", str(project)])
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert "is a link" in err
+    assert proj_foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho user-proj\n"
+    assert not (proj_userbin / "tool").exists()
+
+    # Global public CLI install with symlinked global/bin refuses without touching userbin.
+    global_userbin = tmp_path / "global-userbin"
+    global_userbin.mkdir()
+    global_foreign = global_userbin / "my-global-tool"
+    global_foreign.write_text("#!/bin/sh\necho user-global\n", encoding="utf-8")
+    _write_global_skillfile(
+        csk_home,
+        {"schema_version": 1, "agents": ["codex_cli"], "skills": [{"name": "skill-tool", "tag": "v1"}]},
+    )
+    (csk_home / "global" / "bin").symlink_to(global_userbin, target_is_directory=True)
+
+    rc = cli.main(["global", "install"])
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert "is a link" in err
+    assert global_foreign.read_text(encoding="utf-8") == "#!/bin/sh\necho user-global\n"
+    assert not (global_userbin / "tool").exists()
+
+    # Positive controls: replacing both symlinks with real bin directories allows installs to succeed and clean stale shims.
+    (project / ".agents" / "bin").unlink()
+    (project / ".agents" / "bin").mkdir()
+    (project / ".agents" / "bin" / "stale-shim").write_text("#!/bin/sh\n", encoding="utf-8")
+    assert cli.main(["install", str(project)]) == 0
+    _ = capsys.readouterr()
+    assert (project / ".agents" / "bin" / "tool").exists()
+    assert not (project / ".agents" / "bin" / "stale-shim").exists()
+
+    (csk_home / "global" / "bin").unlink()
+    (csk_home / "global" / "bin").mkdir()
+    (csk_home / "global" / "bin" / "stale-global").write_text("#!/bin/sh\n", encoding="utf-8")
+    assert cli.main(["global", "install"]) == 0
+    _ = capsys.readouterr()
+    assert (csk_home / "global" / "bin" / "tool").exists()
+    assert not (csk_home / "global" / "bin" / "stale-global").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Creates POSIX directory symlinks")
+def test_global_user_bin_refuses_symlinked_user_bin_preserving_foreign_files(tmp_path, csk_home):
+    # Symlinked user-bin targets are skipped with a warning during global user-bin planning/refresh and refused by _remove_managed_command, leaving target files untouched; a real user-bin removes only ledger-managed stale commands and preserves foreign files.
+    target_dir = tmp_path / "real-user-dir"
+    target_dir.mkdir()
+    (target_dir / ".csk-managed.json").write_text(
+        json.dumps({"schema_version": 1, "entries": ["old-tool"]}) + "\n",
+        encoding="utf-8",
+    )
+    (target_dir / "old-tool").write_text("#!/bin/sh\necho old\n", encoding="utf-8")
+    (target_dir / "foreign-tool").write_text("#!/bin/sh\necho foreign\n", encoding="utf-8")
+
+    linked_bin = tmp_path / "linked-user-bin"
+    linked_bin.symlink_to(target_dir, target_is_directory=True)
+
+    targets, plan_msgs = global_bins.plan_user_bin_targets(
+        csk_home,
+        set(),
+        env={"CSK_GLOBAL_USER_BIN": str(linked_bin), "PATH": ""},
+        home=tmp_path,
+    )
+    assert targets == ()
+    assert any("symbolic link" in m for m in plan_msgs)
+
+    refresh_msgs = global_bins.refresh_user_bin_shims(
+        csk_home,
+        set(),
+        env={"CSK_GLOBAL_USER_BIN": str(linked_bin), "PATH": ""},
+        home=tmp_path,
+    )
+    assert any("symbolic link" in m for m in refresh_msgs)
+    assert (target_dir / "old-tool").is_file()
+    assert (target_dir / "foreign-tool").is_file()
+
+    with pytest.raises(shims.ShimError, match="is a link"):
+        global_bins._remove_managed_command(linked_bin, "old-tool", platform_name="unix")
+    assert (target_dir / "old-tool").is_file()
+
+    # Positive control: real user-bin removes ledger-managed stale command and keeps foreign file.
+    global_bins.refresh_user_bin_shims(
+        csk_home,
+        set(),
+        env={"CSK_GLOBAL_USER_BIN": str(target_dir), "PATH": ""},
+        home=tmp_path,
+    )
+    assert not (target_dir / "old-tool").exists()
+    assert (target_dir / "foreign-tool").read_text(encoding="utf-8") == "#!/bin/sh\necho foreign\n"
