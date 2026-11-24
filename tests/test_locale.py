@@ -580,13 +580,14 @@ def test_public_install_preserves_frontmatter_and_warns_without_refusing_unsuppo
     ).read_text(encoding="utf-8") == source_openai
 
     # Unsupported frontmatter, flow-mapping openai.yaml, and missing locale description warn in both skillcheck and installer.install without refusing, preserving source bytes.
-    bad_skill_text = "---\nname: skill-bad-fm\nmetadata: {broken\n---\n# Keep body\n"
+    bad_skill_bytes = b"---\nname: skill-bad-fm\nmetadata: {broken\n---\n# Keep body\n"
+    bad_openai_bytes = b"interface: {display_name: SourceName}\n"
     bad_repo, _ = make_skill_repo(
         skills_root,
         "skill-bad-fm",
         {
-            "SKILL.md": bad_skill_text,
-            "agents/openai.yaml": "interface: {display_name: SourceName}\n",
+            "SKILL.md": bad_skill_bytes,
+            "agents/openai.yaml": bad_openai_bytes,
             "locales/metadata.json": json.dumps(
                 {"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}
             ),
@@ -613,21 +614,20 @@ def test_public_install_preserves_frontmatter_and_warns_without_refusing_unsuppo
         "skill-bad-fm" in msg and "'ru'" in msg and "interface" in msg
         for msg in res_bad.messages
     )
-    assert (project_bad / ".agents" / "skills" / "skill-bad-fm" / "SKILL.md").read_bytes() == (
-        bad_skill_text.encode("utf-8")
-    )
+    assert (project_bad / ".agents" / "skills" / "skill-bad-fm" / "SKILL.md").read_bytes() == bad_skill_bytes
     assert (
         project_bad / ".agents" / "skills" / "skill-bad-fm" / "agents" / "openai.yaml"
-    ).read_bytes() == b"interface: {display_name: SourceName}\n"
+    ).read_bytes() == bad_openai_bytes
 
     # Locale without description warns on SKILL.md, leaves SKILL.md as in source, and still localizes agents/openai.yaml.
-    no_desc_skill = "---\nname: skill-no-desc\ndescription: English source\n---\n"
+    no_desc_skill_bytes = b"---\nname: skill-no-desc\ndescription: English source\n---\n"
+    no_desc_openai_bytes = b"interface:\n  display_name: Old\n"
     make_skill_repo(
         skills_root,
         "skill-no-desc",
         {
-            "SKILL.md": no_desc_skill,
-            "agents/openai.yaml": "interface:\n  display_name: Old\n",
+            "SKILL.md": no_desc_skill_bytes,
+            "agents/openai.yaml": no_desc_openai_bytes,
             "locales/metadata.json": json.dumps({"locales": {"ru": {"display_name": "Имя"}}}),
             ".skill_triggers/ru.md": "- триггер\n",
         },
@@ -647,7 +647,7 @@ def test_public_install_preserves_frontmatter_and_warns_without_refusing_unsuppo
     )
     assert (
         project_no_desc / ".agents" / "skills" / "skill-no-desc" / "SKILL.md"
-    ).read_bytes() == no_desc_skill.encode("utf-8")
+    ).read_bytes() == no_desc_skill_bytes
     assert (
         project_no_desc / ".agents" / "skills" / "skill-no-desc" / "agents" / "openai.yaml"
     ).read_bytes() == 'interface:\n  display_name: "Имя"\n'.encode("utf-8")
@@ -724,7 +724,7 @@ def test_non_utf8_skill_md_and_openai_yaml_warn_and_preserve_raw_bytes(
         skills_root,
         "skill-nonutf8",
         {
-            "SKILL.md": raw_skill.decode("utf-8"),
+            "SKILL.md": raw_skill,
             "locales/metadata.json": json.dumps(
                 {"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}
             ),
