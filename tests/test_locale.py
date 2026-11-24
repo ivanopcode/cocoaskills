@@ -265,15 +265,16 @@ def test_localized_openai_yaml_preserves_extra_top_level_and_interface_keys(tmp_
         "---\n- sequence-not-mapping\n---\n",
     ],
 )
-def test_unparseable_frontmatter_refuses_and_leaves_file_untouched(tmp_path, bad_frontmatter):
-    # Unparseable SKILL.md frontmatter is refused by both analyze_locale and render_locale, leaving SKILL.md untouched.
+def test_unsupported_frontmatter_warns_and_leaves_file_untouched(tmp_path, bad_frontmatter):
+    # Unsupported SKILL.md frontmatter emits a warning naming locale and field without failing, and render_locale leaves SKILL.md byte-for-byte unchanged instead of falling back to a lossy rebuild.
     snapshot = tmp_path / "snapshot"
     installed = tmp_path / "installed"
     (snapshot / "locales").mkdir(parents=True)
     (snapshot / ".skill_triggers").mkdir()
     installed.mkdir()
-    (snapshot / "SKILL.md").write_text(bad_frontmatter, encoding="utf-8")
-    (installed / "SKILL.md").write_text(bad_frontmatter, encoding="utf-8")
+    raw_bytes = bad_frontmatter.encode("utf-8")
+    (snapshot / "SKILL.md").write_bytes(raw_bytes)
+    (installed / "SKILL.md").write_bytes(raw_bytes)
     (snapshot / "locales" / "metadata.json").write_text(
         json.dumps({"locales": {"ru": {"description": "Описание"}}}),
         encoding="utf-8",
@@ -281,43 +282,220 @@ def test_unparseable_frontmatter_refuses_and_leaves_file_untouched(tmp_path, bad
     (snapshot / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
 
     analysis = locale.analyze_locale(snapshot, "ru")
-    assert analysis.failed
+    assert not analysis.failed
+    assert analysis.locale_to_render == "ru"
+    assert len(analysis.issues) == 1
+    assert analysis.issues[0].severity == "warning"
     assert analysis.issues[0].code == "locale.frontmatter_invalid"
     assert analysis.issues[0].path == "SKILL.md"
+    assert "'ru'" in analysis.issues[0].message
+    assert "description" in analysis.issues[0].message
 
-    with pytest.raises(locale.LocaleError):
-        locale.render_locale(snapshot, installed, "ru")
-    assert (installed / "SKILL.md").read_text(encoding="utf-8") == bad_frontmatter
+    issues = locale.render_locale(snapshot, installed, "ru")
+    assert any(issue.code == "locale.frontmatter_invalid" and issue.severity == "warning" for issue in issues)
+    assert (installed / "SKILL.md").read_bytes() == raw_bytes
 
 
-def test_blank_locale_description_refuses_instead_of_silent_noop(tmp_path):
-    # A selected consistent locale with missing or blank description refuses rather than succeeding while writing nothing.
+@pytest.mark.parametrize(
+    "locale_entry,expect_openai_localized",
+    [
+        ({"description": "   "}, False),
+        ({"display_name": "Имя"}, True),
+    ],
+)
+def test_missing_or_blank_locale_description_warns_and_preserves_source_skill_md(
+    tmp_path, locale_entry, expect_openai_localized
+):
+    # A selected locale with missing or blank description warns instead of refusing, keeps SKILL.md byte-identical to source, and still localizes agents/openai.yaml when openai fields are present.
     snapshot = tmp_path / "snapshot"
     installed = tmp_path / "installed"
     (snapshot / "locales").mkdir(parents=True)
     (snapshot / ".skill_triggers").mkdir()
-    installed.mkdir()
-    source = "---\nname: skill\ndescription: Original\n---\n"
-    (snapshot / "SKILL.md").write_text(source, encoding="utf-8")
-    (installed / "SKILL.md").write_text(source, encoding="utf-8")
+    (snapshot / "agents").mkdir()
+    (installed / "agents").mkdir(parents=True)
+    source_skill = b"---\nname: skill\nlicense: MIT\ndescription: Original\n---\nbody\n"
+    source_openai = b"version: 1\ninterface:\n  icon: ./icon.svg\n  display_name: Old\n"
+    (snapshot / "SKILL.md").write_bytes(source_skill)
+    (installed / "SKILL.md").write_bytes(source_skill)
+    (snapshot / "agents" / "openai.yaml").write_bytes(source_openai)
+    (installed / "agents" / "openai.yaml").write_bytes(source_openai)
     (snapshot / "locales" / "metadata.json").write_text(
-        json.dumps({"locales": {"ru": {"description": "   "}}}),
+        json.dumps({"locales": {"ru": locale_entry}}),
         encoding="utf-8",
     )
     (snapshot / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
 
     analysis = locale.analyze_locale(snapshot, "ru")
-    assert analysis.failed
-    assert analysis.issues[0].code == "locale.metadata_invalid"
-    with pytest.raises(locale.LocaleError, match="description"):
-        locale.render_locale(snapshot, installed, "ru")
-    assert (installed / "SKILL.md").read_text(encoding="utf-8") == source
+    assert not analysis.failed
+    assert analysis.locale_to_render == "ru"
+    assert len(analysis.issues) == 1
+    assert analysis.issues[0].severity == "warning"
+    assert analysis.issues[0].code == "locale.description_missing"
+    assert "'ru'" in analysis.issues[0].message
+    assert "description" in analysis.issues[0].message
+
+    issues = locale.render_locale(snapshot, installed, "ru")
+    assert any(issue.code == "locale.description_missing" for issue in issues)
+    assert (installed / "SKILL.md").read_bytes() == source_skill
+    if expect_openai_localized:
+        assert (installed / "agents" / "openai.yaml").read_bytes() == (
+            'version: 1\ninterface:\n  icon: ./icon.svg\n  display_name: "Имя"\n'.encode("utf-8")
+        )
+    else:
+        assert (installed / "agents" / "openai.yaml").read_bytes() == source_openai
 
 
-def test_public_install_preserves_frontmatter_and_refuses_unparseable_frontmatter(
+@pytest.mark.parametrize(
+    "bad_openai",
+    [
+        "interface: {display_name: Old, icon: ./icon.svg}\n",
+        "interface: not-a-mapping\n",
+    ],
+)
+def test_unsupported_openai_yaml_warns_and_preserves_source_bytes(tmp_path, bad_openai):
+    # Unsupported agents/openai.yaml forms (such as a flow-mapping interface) emit a warning naming locale and field without refusing, localize SKILL.md, and leave agents/openai.yaml byte-identical to source.
+    snapshot = tmp_path / "snapshot"
+    installed = tmp_path / "installed"
+    (snapshot / "locales").mkdir(parents=True)
+    (snapshot / ".skill_triggers").mkdir()
+    (snapshot / "agents").mkdir()
+    (installed / "agents").mkdir(parents=True)
+    source_skill = b"---\nname: skill\ndescription: Source\n---\nbody\n"
+    raw_openai = bad_openai.encode("utf-8")
+    (snapshot / "SKILL.md").write_bytes(source_skill)
+    (installed / "SKILL.md").write_bytes(source_skill)
+    (snapshot / "agents" / "openai.yaml").write_bytes(raw_openai)
+    (installed / "agents" / "openai.yaml").write_bytes(raw_openai)
+    (snapshot / "locales" / "metadata.json").write_text(
+        json.dumps({"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}),
+        encoding="utf-8",
+    )
+    (snapshot / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
+
+    analysis = locale.analyze_locale(snapshot, "ru")
+    assert not analysis.failed
+    assert analysis.locale_to_render == "ru"
+    assert len(analysis.issues) == 1
+    assert analysis.issues[0].severity == "warning"
+    assert analysis.issues[0].code == "locale.openai_yaml_invalid"
+    assert analysis.issues[0].path == "agents/openai.yaml"
+    assert "'ru'" in analysis.issues[0].message
+    assert "interface" in analysis.issues[0].message
+
+    issues = locale.render_locale(snapshot, installed, "ru")
+    assert any(issue.code == "locale.openai_yaml_invalid" for issue in issues)
+    assert (installed / "agents" / "openai.yaml").read_bytes() == raw_openai
+    assert 'description: "Описание"\n' in (installed / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_crlf_line_endings_preserved_byte_for_byte_in_skill_md_and_openai_yaml(tmp_path):
+    # Localized rewriting preserves CRLF line endings byte-for-byte in SKILL.md and agents/openai.yaml (and LF in LF files) without newline translation.
+    snapshot = tmp_path / "snapshot-crlf"
+    installed = tmp_path / "installed-crlf"
+    (snapshot / "locales").mkdir(parents=True)
+    (snapshot / ".skill_triggers").mkdir()
+    (snapshot / "agents").mkdir()
+    (installed / "agents").mkdir(parents=True)
+    source_skill = (
+        b"---\r\n"
+        b"name: crlf-skill\r\n"
+        b"license: MIT\r\n"
+        b"description: Source description\r\n"
+        b"allowed-tools:\r\n"
+        b"  - Bash\r\n"
+        b"---\r\n"
+        b"\r\n"
+        b"# Body\r\n"
+        b"line two\r\n"
+    )
+    source_openai = (
+        b"version: 1\r\n"
+        b"interface:\r\n"
+        b"  icon: ./icon.svg\r\n"
+        b"  display_name: Old Name\r\n"
+        b"policy:\r\n"
+        b"  allow_implicit_invocation: true\r\n"
+    )
+    (snapshot / "SKILL.md").write_bytes(source_skill)
+    (installed / "SKILL.md").write_bytes(source_skill)
+    (snapshot / "agents" / "openai.yaml").write_bytes(source_openai)
+    (installed / "agents" / "openai.yaml").write_bytes(source_openai)
+    (snapshot / "locales" / "metadata.json").write_text(
+        json.dumps(
+            {
+                "locales": {
+                    "ru": {
+                        "description": "Описание",
+                        "display_name": "Скилл",
+                        "short_description": "Кратко",
+                        "default_prompt": "Запусти",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (snapshot / ".skill_triggers" / "ru.md").write_bytes(b"- trigger-ru\r\n")
+
+    issues = locale.render_locale(snapshot, installed, "ru")
+    assert issues == ()
+
+    out_skill = (installed / "SKILL.md").read_bytes()
+    assert out_skill == (
+        "---\r\n"
+        "name: crlf-skill\r\n"
+        "license: MIT\r\n"
+        'description: "Описание"\r\n'
+        "allowed-tools:\r\n"
+        "  - Bash\r\n"
+        "triggers:\r\n"
+        '  - "trigger-ru"\r\n'
+        "---\r\n"
+        "\r\n"
+        "# Body\r\n"
+        "line two\r\n"
+    ).encode("utf-8")
+    assert out_skill.count(b"\n") == out_skill.count(b"\r\n")
+
+    out_openai = (installed / "agents" / "openai.yaml").read_bytes()
+    assert out_openai == (
+        "version: 1\r\n"
+        "interface:\r\n"
+        "  icon: ./icon.svg\r\n"
+        '  display_name: "Скилл"\r\n'
+        '  short_description: "Кратко"\r\n'
+        '  default_prompt: "Запусти"\r\n'
+        "policy:\r\n"
+        "  allow_implicit_invocation: true\r\n"
+    ).encode("utf-8")
+    assert out_openai.count(b"\n") == out_openai.count(b"\r\n")
+
+    # Positive control: LF-only source files stay pure LF with zero CR bytes.
+    lf_snapshot = tmp_path / "snapshot-lf"
+    lf_installed = tmp_path / "installed-lf"
+    (lf_snapshot / "locales").mkdir(parents=True)
+    (lf_snapshot / ".skill_triggers").mkdir()
+    (lf_snapshot / "agents").mkdir()
+    (lf_installed / "agents").mkdir(parents=True)
+    lf_skill = source_skill.replace(b"\r\n", b"\n")
+    lf_openai = source_openai.replace(b"\r\n", b"\n")
+    (lf_snapshot / "SKILL.md").write_bytes(lf_skill)
+    (lf_installed / "SKILL.md").write_bytes(lf_skill)
+    (lf_snapshot / "agents" / "openai.yaml").write_bytes(lf_openai)
+    (lf_installed / "agents" / "openai.yaml").write_bytes(lf_openai)
+    (lf_snapshot / "locales" / "metadata.json").write_bytes(
+        (snapshot / "locales" / "metadata.json").read_bytes()
+    )
+    (lf_snapshot / ".skill_triggers" / "ru.md").write_bytes(b"- trigger-ru\n")
+    locale.render_locale(lf_snapshot, lf_installed, "ru")
+    assert b"\r" not in (lf_installed / "SKILL.md").read_bytes()
+    assert b"\r" not in (lf_installed / "agents" / "openai.yaml").read_bytes()
+
+
+def test_public_install_preserves_frontmatter_and_warns_without_refusing_unsupported_forms(
     tmp_path, skills_root, csk_home
 ):
-    # Public installer.install preserves non-localized frontmatter and agents/openai.yaml keys on localized install, keeps unlocalized install unchanged, and refuses unparseable frontmatter consistently with skill check.
+    # Public installer.install preserves non-localized frontmatter and agents/openai.yaml keys, keeps unlocalized installs unchanged, preserves CRLF, and warns (never refuses) while preserving source bytes when locale description is missing or YAML forms are unsupported.
     from conftest import make_config, make_project, make_skill_repo, write_skillfile
     from csk import installer, skillcheck
 
@@ -401,25 +579,75 @@ def test_public_install_preserves_frontmatter_and_refuses_unparseable_frontmatte
         project_raw / ".agents" / "skills" / "skill-loc" / "agents" / "openai.yaml"
     ).read_text(encoding="utf-8") == source_openai
 
-    # Unparseable frontmatter refuses in both skillcheck and installer.install.
+    # Unsupported frontmatter, flow-mapping openai.yaml, and missing locale description warn in both skillcheck and installer.install without refusing, preserving source bytes.
+    bad_skill_text = "---\nname: skill-bad-fm\nmetadata: {broken\n---\n# Keep body\n"
     bad_repo, _ = make_skill_repo(
         skills_root,
         "skill-bad-fm",
         {
-            "SKILL.md": "---\nname: skill-bad-fm\nmetadata: {broken\n---\n",
-            "locales/metadata.json": json.dumps({"locales": {"ru": {"description": "Описание"}}}),
+            "SKILL.md": bad_skill_text,
+            "agents/openai.yaml": "interface: {display_name: SourceName}\n",
+            "locales/metadata.json": json.dumps(
+                {"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}
+            ),
             ".skill_triggers/ru.md": "- триггер\n",
         },
         tag="v1",
     )
     issues = skillcheck.validate_skill(bad_repo, locale_value="ru")
-    assert skillcheck.has_errors(issues)
-    assert any(issue.code == "locale.frontmatter_invalid" for issue in issues)
+    assert not skillcheck.has_errors(issues)
+    assert [(issue.severity, issue.code) for issue in issues] == [
+        ("warning", "locale.frontmatter_invalid"),
+        ("warning", "locale.openai_yaml_invalid"),
+    ]
     project_bad = make_project(tmp_path, "proj-bad")
     write_skillfile(project_bad, {"schema_version": 1, "skills": [{"name": "skill-bad-fm", "tag": "v1"}]})
     cfg_bad = make_config(csk_home, skills_root, project_bad)
     res_bad = installer.install(cfg_bad)[0]
-    assert res_bad.errors
-    frontmatter_issue = next(issue for issue in issues if issue.code == "locale.frontmatter_invalid")
-    assert any(frontmatter_issue.message in err for err in res_bad.errors)
-    assert not (project_bad / ".agents" / "skills" / "skill-bad-fm").exists()
+    assert not res_bad.errors
+    assert any(
+        "skill-bad-fm" in msg and "'ru'" in msg and "description" in msg
+        for msg in res_bad.messages
+    )
+    assert any(
+        "skill-bad-fm" in msg and "'ru'" in msg and "interface" in msg
+        for msg in res_bad.messages
+    )
+    assert (project_bad / ".agents" / "skills" / "skill-bad-fm" / "SKILL.md").read_bytes() == (
+        bad_skill_text.encode("utf-8")
+    )
+    assert (
+        project_bad / ".agents" / "skills" / "skill-bad-fm" / "agents" / "openai.yaml"
+    ).read_bytes() == b"interface: {display_name: SourceName}\n"
+
+    # Locale without description warns on SKILL.md, leaves SKILL.md as in source, and still localizes agents/openai.yaml.
+    no_desc_skill = "---\nname: skill-no-desc\ndescription: English source\n---\n"
+    make_skill_repo(
+        skills_root,
+        "skill-no-desc",
+        {
+            "SKILL.md": no_desc_skill,
+            "agents/openai.yaml": "interface:\n  display_name: Old\n",
+            "locales/metadata.json": json.dumps({"locales": {"ru": {"display_name": "Имя"}}}),
+            ".skill_triggers/ru.md": "- триггер\n",
+        },
+        tag="v1",
+    )
+    project_no_desc = make_project(tmp_path, "proj-no-desc")
+    write_skillfile(
+        project_no_desc,
+        {"schema_version": 1, "skills": [{"name": "skill-no-desc", "tag": "v1"}]},
+    )
+    cfg_no_desc = make_config(csk_home, skills_root, project_no_desc)
+    res_no_desc = installer.install(cfg_no_desc)[0]
+    assert not res_no_desc.errors
+    assert any(
+        "skill-no-desc" in msg and "'ru'" in msg and "description" in msg
+        for msg in res_no_desc.messages
+    )
+    assert (
+        project_no_desc / ".agents" / "skills" / "skill-no-desc" / "SKILL.md"
+    ).read_bytes() == no_desc_skill.encode("utf-8")
+    assert (
+        project_no_desc / ".agents" / "skills" / "skill-no-desc" / "agents" / "openai.yaml"
+    ).read_bytes() == 'interface:\n  display_name: "Имя"\n'.encode("utf-8")

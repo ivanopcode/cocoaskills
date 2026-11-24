@@ -165,26 +165,27 @@ def analyze_locale(
     if locale in consistent:
         locale_data = locales[locale]
         description = locale_data.get("description")
-        if not isinstance(description, str) or not description.strip():
-            return LocaleAnalysis(
-                locale_to_render=None,
-                issues=(
-                    LocaleIssue(
-                        "error",
-                        "locale.metadata_invalid",
-                        "locales/metadata.json",
-                        f"Locale {locale!r} in {metadata_path} must define a non-empty string 'description'",
-                    ),
-                ),
+        has_description = isinstance(description, str) and bool(description.strip())
+        if not has_description:
+            issues.append(
+                LocaleIssue(
+                    "warning",
+                    "locale.description_missing",
+                    "locales/metadata.json",
+                    f"Locale {locale!r} in {metadata_path} does not define a non-empty string "
+                    "'description'; leaving SKILL.md field 'description' as in source",
+                )
             )
-        render_issues = _validate_render_targets(
-            snapshot,
-            locale_data,
-            exclude_roots=exclude_roots,
+        issues.extend(
+            _validate_render_targets(
+                snapshot,
+                locale_data,
+                locale=locale,
+                validate_skill_frontmatter=has_description,
+                exclude_roots=exclude_roots,
+            )
         )
-        if render_issues:
-            return LocaleAnalysis(locale_to_render=None, issues=tuple(render_issues))
-        return LocaleAnalysis(locale_to_render=locale)
+        return LocaleAnalysis(locale_to_render=locale, issues=tuple(issues))
 
     available = ", ".join(sorted(consistent))
     issues.append(
@@ -205,14 +206,14 @@ def render_locale(
     locale: str | None,
     *,
     exclude_roots: tuple[str, ...] = (),
-) -> None:
+) -> tuple[LocaleIssue, ...]:
     analysis = analyze_locale(snapshot, locale, exclude_roots=exclude_roots)
     if analysis.failed:
         first_error = next(issue for issue in analysis.issues if issue.severity == "error")
         raise LocaleError(first_error.message)
     locale_to_render = analysis.locale_to_render
     if not locale_to_render:
-        return
+        return analysis.issues
     metadata_path = snapshot / "locales" / "metadata.json"
     triggers_path = snapshot / ".skill_triggers" / f"{locale_to_render}.md"
     metadata = _load_metadata(metadata_path)
@@ -223,84 +224,129 @@ def render_locale(
     if not isinstance(locale_data, dict):
         raise LocaleError(f"Locale {locale_to_render!r} metadata must be an object")
 
-    description = locale_data.get("description")
-    if not isinstance(description, str) or not description.strip():
-        raise LocaleError(
-            f"Locale {locale_to_render!r} in {metadata_path} must define a non-empty string 'description'"
-        )
+    issues = list(analysis.issues)
     triggers = _parse_triggers(triggers_path)
 
-    skill_path = installed_dir / "SKILL.md"
-    if not skill_path.is_file():
-        raise LocaleError(f"Cannot localize missing SKILL.md: {skill_path}")
-    rendered_skill = _render_skill_frontmatter(
-        skill_path.read_text(encoding="utf-8"),
-        description.strip(),
-        triggers,
-        path_label=str(skill_path),
-    )
+    rendered_skill: str | None = None
+    description = locale_data.get("description")
+    if isinstance(description, str) and description.strip():
+        skill_path = installed_dir / "SKILL.md"
+        if not skill_path.is_file():
+            raise LocaleError(f"Cannot localize missing SKILL.md: {skill_path}")
+        try:
+            rendered_skill = _render_skill_frontmatter(
+                _read_utf8_exact(skill_path),
+                description.strip(),
+                triggers,
+                path_label=str(skill_path),
+            )
+        except LocaleError as exc:
+            if not any(issue.code == "locale.frontmatter_invalid" for issue in issues):
+                issues.append(
+                    LocaleIssue(
+                        "warning",
+                        "locale.frontmatter_invalid",
+                        "SKILL.md",
+                        f"Locale {locale_to_render!r} cannot rewrite SKILL.md frontmatter "
+                        f"field 'description' ({exc}); leaving SKILL.md as in source",
+                    )
+                )
 
-    openai_path = installed_dir / "agents" / "openai.yaml"
+    openai_rel = Path("agents/openai.yaml")
+    openai_path = installed_dir / openai_rel
     rendered_openai: str | None = None
     openai_fields = _extract_openai_fields(locale_data)
-    if openai_path.exists() and openai_fields:
-        rendered_openai = _render_openai_yaml(
-            openai_path.read_text(encoding="utf-8"),
-            openai_fields,
-            path_label=str(openai_path),
-        )
+    if (
+        openai_path.is_file()
+        and not whitelist.is_below_excluded_root(openai_rel, exclude_roots)
+        and openai_fields
+    ):
+        try:
+            rendered_openai = _render_openai_yaml(
+                _read_utf8_exact(openai_path),
+                openai_fields,
+                path_label=str(openai_path),
+            )
+        except LocaleError as exc:
+            if not any(issue.code == "locale.openai_yaml_invalid" for issue in issues):
+                fields_list = ", ".join(openai_fields)
+                issues.append(
+                    LocaleIssue(
+                        "warning",
+                        "locale.openai_yaml_invalid",
+                        "agents/openai.yaml",
+                        f"Locale {locale_to_render!r} cannot rewrite agents/openai.yaml "
+                        f"field 'interface' ({fields_list}) ({exc}); leaving agents/openai.yaml as in source",
+                    )
+                )
 
-    skill_path.write_text(rendered_skill, encoding="utf-8")
+    if rendered_skill is not None:
+        _write_utf8_exact(installed_dir / "SKILL.md", rendered_skill)
     if rendered_openai is not None:
-        openai_path.write_text(rendered_openai, encoding="utf-8")
+        _write_utf8_exact(openai_path, rendered_openai)
+    return tuple(issues)
 
 
 def _validate_render_targets(
     snapshot: Path,
     locale_data: dict[str, object],
     *,
+    locale: str,
+    validate_skill_frontmatter: bool,
     exclude_roots: tuple[str, ...],
 ) -> list[LocaleIssue]:
     issues: list[LocaleIssue] = []
     skill_path = snapshot / "SKILL.md"
-    if skill_path.is_file():
+    if validate_skill_frontmatter and skill_path.is_file():
         try:
             _parse_skill_frontmatter(
-                skill_path.read_text(encoding="utf-8"),
+                _read_utf8_exact(skill_path),
                 path_label="SKILL.md",
             )
         except LocaleError as exc:
             issues.append(
                 LocaleIssue(
-                    "error",
+                    "warning",
                     "locale.frontmatter_invalid",
                     "SKILL.md",
-                    str(exc),
+                    f"Locale {locale!r} cannot rewrite SKILL.md frontmatter "
+                    f"field 'description' ({exc}); leaving SKILL.md as in source",
                 )
             )
     openai_rel = Path("agents/openai.yaml")
     openai_path = snapshot / openai_rel
+    openai_fields = _extract_openai_fields(locale_data)
     if (
         openai_path.is_file()
         and not whitelist.is_below_excluded_root(openai_rel, exclude_roots)
-        and _extract_openai_fields(locale_data)
+        and openai_fields
     ):
         try:
             _render_openai_yaml(
-                openai_path.read_text(encoding="utf-8"),
-                _extract_openai_fields(locale_data),
+                _read_utf8_exact(openai_path),
+                openai_fields,
                 path_label="agents/openai.yaml",
             )
         except LocaleError as exc:
+            fields_list = ", ".join(openai_fields)
             issues.append(
                 LocaleIssue(
-                    "error",
+                    "warning",
                     "locale.openai_yaml_invalid",
                     "agents/openai.yaml",
-                    str(exc),
+                    f"Locale {locale!r} cannot rewrite agents/openai.yaml "
+                    f"field 'interface' ({fields_list}) ({exc}); leaving agents/openai.yaml as in source",
                 )
             )
     return issues
+
+
+def _read_utf8_exact(path: Path) -> str:
+    return path.read_bytes().decode("utf-8")
+
+
+def _write_utf8_exact(path: Path, text: str) -> None:
+    path.write_bytes(text.encode("utf-8"))
 
 
 def _load_metadata(path: Path) -> dict[str, object]:
@@ -316,7 +362,7 @@ def _load_metadata(path: Path) -> dict[str, object]:
 def _parse_triggers(path: Path) -> list[str]:
     triggers: list[str] = []
     in_code = False
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in _read_utf8_exact(path).splitlines():
         stripped = line.strip()
         if stripped.startswith("```"):
             in_code = not in_code
@@ -341,12 +387,12 @@ def _extract_openai_fields(data: dict[str, object]) -> dict[str, str]:
 
 def _rewrite_skill_frontmatter(path: Path, description: str, triggers: list[str]) -> None:
     rendered = _render_skill_frontmatter(
-        path.read_text(encoding="utf-8"),
+        _read_utf8_exact(path),
         description,
         triggers,
         path_label=str(path),
     )
-    path.write_text(rendered, encoding="utf-8")
+    _write_utf8_exact(path, rendered)
 
 
 def _rewrite_openai_yaml(path: Path, data: dict[str, object]) -> None:
@@ -354,11 +400,11 @@ def _rewrite_openai_yaml(path: Path, data: dict[str, object]) -> None:
     if not fields:
         return
     rendered = _render_openai_yaml(
-        path.read_text(encoding="utf-8"),
+        _read_utf8_exact(path),
         fields,
         path_label=str(path),
     )
-    path.write_text(rendered, encoding="utf-8")
+    _write_utf8_exact(path, rendered)
 
 
 def _detect_newline(lines: list[str]) -> str:

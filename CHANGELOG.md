@@ -40,11 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sealed runtime publication, rollback, and recovery of journals left in
   `rolling_back` by earlier releases to complete without manual `chmod`.
 - Preserve all non-localized YAML keys, nested structures, multi-line values,
-  and key ordering during localized rendering of `SKILL.md` frontmatter and
-  `agents/openai.yaml`, keeping source `triggers` intact when the selected
-  locale catalog supplies none and refusing unparseable frontmatter or
-  `agents/openai.yaml` consistently in both `csk skill check` and install
-  instead of silently dropping keys or skipping localization.
+  key ordering, and original line endings (including CRLF) during localized
+  rendering of `SKILL.md` frontmatter and `agents/openai.yaml`, keeping source
+  `triggers` intact when the selected locale catalog supplies none. When a
+  selected locale omits `description` or when `SKILL.md` frontmatter or
+  `agents/openai.yaml` uses a YAML form the targeted rewriter does not support
+  (such as a flow-mapping `interface`), `csk install` leaves that field or file
+  untouched as in the source, emits a warning naming the skill, locale, and
+  field, and continues instead of refusing or falling back to a lossy rebuild;
+  `csk skill check --locale <locale>` reports the same condition as a warning
+  issue for skill authors.
 
 ## [0.23.1] - 2026-11-23
 

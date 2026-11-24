@@ -435,10 +435,12 @@ def test_validate_accepts_build_command_shell_neutral_resolver(tmp_path):
     assert skillcheck.validate_skill(tmp_path) == []
 
 
-def test_validate_reports_unparseable_frontmatter_and_openai_yaml_consistently_with_install(
-    tmp_path,
+def test_validate_reports_unsupported_locale_forms_and_missing_description_as_warnings(
+    tmp_path, capsys
 ):
-    # skillcheck.validate_skill reports locale.frontmatter_invalid and locale.openai_yaml_invalid when localized rendering cannot safely rewrite them; valid frontmatter passes.
+    # csk skill check --locale reports unsupported frontmatter, flow-mapping agents/openai.yaml, and missing locale description as warning issues so authors fix them without breaking installs; valid files pass cleanly.
+    from csk import cli
+
     (tmp_path / "locales").mkdir()
     (tmp_path / ".skill_triggers").mkdir()
     (tmp_path / "agents").mkdir()
@@ -459,22 +461,42 @@ def test_validate_reports_unparseable_frontmatter_and_openai_yaml_consistently_w
     )
     (tmp_path / ".skill_triggers" / "ru.md").write_text("- триггер\n", encoding="utf-8")
     (tmp_path / "SKILL.md").write_text("---\nname: bad\nmetadata: {unclosed\n---\n", encoding="utf-8")
-    (tmp_path / "agents" / "openai.yaml").write_text("interface: not-a-mapping\n", encoding="utf-8")
+    (tmp_path / "agents" / "openai.yaml").write_text(
+        "interface: {display_name: Old}\n", encoding="utf-8"
+    )
 
     issues = skillcheck.validate_skill(tmp_path, locale_value="ru")
-    assert skillcheck.has_errors(issues)
-    assert [(issue.code, issue.path) for issue in issues] == [
-        ("locale.frontmatter_invalid", "SKILL.md"),
-        ("locale.openai_yaml_invalid", "agents/openai.yaml"),
+    assert not skillcheck.has_errors(issues)
+    assert [(issue.severity, issue.code, issue.path) for issue in issues] == [
+        ("warning", "locale.frontmatter_invalid", "SKILL.md"),
+        ("warning", "locale.openai_yaml_invalid", "agents/openai.yaml"),
     ]
+    assert cli.main(["skill", "check", "--locale", "ru", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "locale.frontmatter_invalid" in out
+    assert "locale.openai_yaml_invalid" in out
+    assert ": ok" not in out
 
-    # Positive control: valid frontmatter and openai.yaml pass skillcheck cleanly.
-    (tmp_path / "SKILL.md").write_text(
-        "---\nname: good\nallowed-tools:\n  - Read\ndescription: Source\n---\n",
+    # Missing locale description is also reported as a warning issue.
+    (tmp_path / "locales" / "metadata.json").write_text(
+        json.dumps({"locales": {"ru": {"display_name": "Имя"}}}),
         encoding="utf-8",
+    )
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: good\ndescription: Source\n---\n", encoding="utf-8"
     )
     (tmp_path / "agents" / "openai.yaml").write_text(
         "version: 1\ninterface:\n  icon: ./i.svg\n",
+        encoding="utf-8",
+    )
+    desc_issues = skillcheck.validate_skill(tmp_path, locale_value="ru")
+    assert [(issue.severity, issue.code, issue.path) for issue in desc_issues] == [
+        ("warning", "locale.description_missing", "locales/metadata.json"),
+    ]
+
+    # Positive control: complete locale metadata and supported frontmatter/openai.yaml pass cleanly.
+    (tmp_path / "locales" / "metadata.json").write_text(
+        json.dumps({"locales": {"ru": {"description": "Описание", "display_name": "Имя"}}}),
         encoding="utf-8",
     )
     assert skillcheck.validate_skill(tmp_path, locale_value="ru") == []

@@ -1496,6 +1496,7 @@ def stage_member_context(
     *,
     name: str,
     locale_value: str | None,
+    warnings_out: list[str] | None = None,
 ) -> tuple[list[str], str]:
     """Project one member context from frozen bytes and hash it.
 
@@ -1522,7 +1523,7 @@ def stage_member_context(
             CODE_MEMBER_INVALID, f"Skill {name!r} context cannot be staged: {exc}"
         ) from exc
     try:
-        locale.render_locale(
+        locale_issues = locale.render_locale(
             frozen_dir, context_dir, locale_value, exclude_roots=spec.build_roots
         )
     except locale.LocaleError as exc:
@@ -1533,6 +1534,12 @@ def stage_member_context(
         raise SourceError(
             CODE_MEMBER_INVALID, f"Skill {name!r} locale cannot be rendered: {exc}"
         ) from exc
+    if warnings_out is not None:
+        for issue in locale_issues:
+            if issue.severity == "warning":
+                warnings_out.append(
+                    f"{name}: warning: {issue.code} {issue.path}: {issue.message}"
+                )
     try:
         content = hashing.content_sha256(context_dir)
     except hashing.HashingError as exc:
@@ -2825,6 +2832,7 @@ class StagedDesired:
     bindings: dict[str, bytes]
     desired: dict[tuple[str, str], Path | None]
     up_to_date: tuple[str, ...]
+    locale_warnings: tuple[str, ...] = ()
 
 
 def _utc_now_stamp() -> str:
@@ -3182,6 +3190,7 @@ def stage_schema2_desired(
     """
 
     staged_members: dict[str, StagedMember] = {}
+    locale_warnings: list[str] = []
     staged_skills = staging_root / "skills"
     staged_skills.mkdir(parents=True, exist_ok=True)
     member_by_name = {member.name: member for member in members}
@@ -3192,9 +3201,16 @@ def stage_schema2_desired(
         )
         spec = specs_map[name]
         context_dir = staged_skills / name
+        member_warnings: list[str] = []
         files, content = stage_member_context(
-            frozen_dir, context_dir, spec, name=name, locale_value=locale_value
+            frozen_dir,
+            context_dir,
+            spec,
+            name=name,
+            locale_value=locale_value,
+            warnings_out=member_warnings,
         )
+        locale_warnings.extend(f"{alias}: {warning}" for warning in member_warnings)
         staged_members[name] = StagedMember(
             captured=captured[name],
             spec=spec,
@@ -3412,6 +3428,7 @@ def stage_schema2_desired(
         bindings=bindings,
         desired=desired,
         up_to_date=tuple(sorted(up_to_date)),
+        locale_warnings=tuple(locale_warnings),
     )
 
 
@@ -5181,6 +5198,7 @@ def _plan_and_publish_schema2(
     )
     lock_replaced = (CLASS_LOCK, "Skillfile.lock.json") in committed
     messages = list(plan_messages)
+    messages.extend(staged.locale_warnings)
     if mcp_plan is not None:
         if added_mcp_ignores:
             messages.append("added MCP gitignore entries: " + ", ".join(added_mcp_ignores))
