@@ -746,6 +746,7 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
             "fast_go_e2e",
             "fast_draft_sources",
             "floor_syntax",
+            "macos_15_sealed_rename",
         },
         "merge": {
             "typecheck",
@@ -754,6 +755,7 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
             "merge_protocol",
             "merge_go_e2e",
             "merge_draft_sources",
+            "macos_15_sealed_rename",
         },
     }
     for job_id, children in expected.items():
@@ -781,6 +783,22 @@ def test_stable_aggregates_always_run_and_fail_closed() -> None:
             unhealthy[next(iter(children))] = {"result": result}
             env["NEEDS_JSON"] = json.dumps(unhealthy)
             assert subprocess.run([sys.executable, "-c", script], env=env, check=False).returncode != 0
+
+
+def test_macos15_sealed_rename_lane_probes_and_tests_transactions() -> None:
+    # CI runs a dedicated macos-15 lane probing same-parent and cross-parent renamex_np(0x4) on 0555 dirs and running targeted transaction tests.
+    workflow = _workflow()
+    job_text = _job(workflow, "macos_15_sealed_rename")
+    job = yaml.safe_load(workflow)["jobs"]["macos_15_sealed_rename"]
+    assert job["runs-on"] == "macos-15"
+    assert job["timeout-minutes"] == 20
+    assert "if" not in job
+    assert "renamex_np" in job_text
+    assert "0x00000004" in job_text
+    assert "same-parent" in job_text
+    assert "cross-parent" in job_text
+    assert "tests/test_transactions.py" in job_text
+    assert "tests/test_runtime_tree_writes.py" in job_text
 
 
 def test_floor_syntax_gate_is_a_cheap_pr_time_floor_compile() -> None:

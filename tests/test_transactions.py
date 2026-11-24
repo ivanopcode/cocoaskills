@@ -2974,3 +2974,427 @@ def test_namespace_independence_still_detects_a_physical_alias(tmp_path: Path):
             targets,
             corruption=False,
         )
+
+
+def _install_darwin_sealed_dir_rename_simulator(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    error_number: int = 13,
+    fail_always: bool = False,
+    fail_paths: set[Path] | None = None,
+) -> list[tuple[Path, Path, int]]:
+    """Simulate a macOS 15 kernel refusing renamex_np(RENAME_EXCL) on non-writable dirs."""
+    host_rename = (
+        transactions._windows_rename_no_replace
+        if transactions._is_windows()
+        else (
+            transactions._darwin_rename_no_replace
+            if sys.platform == "darwin"
+            else transactions._linux_rename_no_replace
+        )
+    )
+    attempts: list[tuple[Path, Path, int]] = []
+
+    def simulated_darwin_rename(source: Path, destination: Path) -> None:
+        info = source.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        attempts.append((source, destination, mode))
+        if fail_always and (fail_paths is None or source in fail_paths):
+            transactions._raise_posix_rename_error(error_number, source, destination)
+        if (
+            stat.S_ISDIR(info.st_mode)
+            and not stat.S_ISLNK(info.st_mode)
+            and not (mode & stat.S_IWUSR)
+        ):
+            transactions._raise_posix_rename_error(
+                13 if fail_paths is not None else error_number,
+                source,
+                destination,
+            )
+        host_rename(source, destination)
+
+    monkeypatch.setattr(transactions, "_is_darwin", lambda: True)
+    monkeypatch.setattr(
+        transactions, "_darwin_rename_no_replace", simulated_darwin_rename
+    )
+    return attempts
+
+
+def _make_sealed_tree(root: Path, payload: str) -> None:
+    _write(root / "nested" / "payload", payload)
+    (root / "nested" / "payload").chmod(0o444)
+    (root / "nested").chmod(0o555)
+    root.chmod(0o555)
+
+
+@pytest.mark.parametrize("error_number", [13, 1])
+def test_darwin_sealed_directory_rename_thaws_retries_restores_and_preserves_digests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_number: int,
+):
+    # On macOS EACCES/EPERM for 0555 directories, commit, rollback, and cleanup tombs thaw only the renamed directory, retry, restore exact modes, and preserve digests.
+    home = tmp_path / "home"
+    live = tmp_path / "live"
+    desired = tmp_path / "desired"
+    _make_sealed_tree(live, "old-runtime")
+    _make_sealed_tree(desired, "new-runtime")
+    old_digest = digest_path(live)
+    new_digest = digest_path(desired)
+
+    attempts = _install_darwin_sealed_dir_rename_simulator(
+        monkeypatch, error_number=error_number
+    )
+    chmod_targets: list[Path] = []
+    real_chmod = Path.chmod
+    in_cleanup = False
+
+    def observe_chmod(path: Path, mode: int, **kwargs: object) -> None:
+        if not in_cleanup:
+            chmod_targets.append(path)
+        real_chmod(path, mode, **kwargs)  # type: ignore[arg-type]
+
+    def track_phase(point: str, _target: JournalTarget | None) -> None:
+        nonlocal in_cleanup
+        if point == "before_cleanup":
+            in_cleanup = True
+
+    engine = TransactionEngine(home, fault_hook=track_phase)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(
+                f"txn-darwin-commit-{error_number}",
+                tmp_path / "project",
+                _target("20-runtime", "skill-a", live, desired),
+            ),
+        )
+        monkeypatch.setattr(Path, "chmod", observe_chmod)
+        engine.commit(lock, f"txn-darwin-commit-{error_number}")
+        monkeypatch.setattr(Path, "chmod", real_chmod)
+
+    # Commit hit EACCES/EPERM on live->backup, staged->live, and backup->tomb, retrying each once.
+    assert len(attempts) >= 6
+    # Nested directory was never thawed during commit renames (single-directory thaw only).
+    assert not any(path.name == "nested" for path in chmod_targets)
+    assert digest_path(live) == new_digest
+    assert (live / "nested" / "payload").read_text(encoding="utf-8") == "new-runtime"
+    _assert_mode_identity(live, 0o555)
+    _assert_mode_identity(live / "nested", 0o555)
+    _assert_mode_identity(live / "nested" / "payload", 0o444)
+    assert not list(engine.journal_root.glob("*.json*"))
+    assert not any(tmp_path.glob(".csk-txn-*"))
+
+    # Now force rollback after first target commits so rollback renames (live->rollback, backup->live, sidecar->tomb) are exercised too.
+    desired_v3 = tmp_path / "desired-v3"
+    _make_sealed_tree(desired_v3, "v3-runtime")
+    second_live = tmp_path / "second-live"
+    second_desired = _write(tmp_path / "second-desired", "v3-second")
+    attempts.clear()
+
+    def fail_second(point: str, target: JournalTarget | None) -> None:
+        if point == "after_install" and target is not None and target.identifier == "skill-b":
+            raise RuntimeError("injected failure to force rollback")
+
+    rollback_engine = TransactionEngine(home, fault_hook=fail_second)
+    with ManagerHomeLock(home) as lock:
+        rollback_engine.prepare(
+            lock,
+            _plan(
+                f"txn-darwin-rollback-{error_number}",
+                tmp_path / "project",
+                _target("20-runtime", "skill-a", live, desired_v3),
+                _target("30-other", "skill-b", second_live, second_desired),
+            ),
+        )
+        with pytest.raises(RuntimeError, match="injected failure"):
+            rollback_engine.commit(lock, f"txn-darwin-rollback-{error_number}")
+
+    assert digest_path(live) == new_digest
+    assert (live / "nested" / "payload").read_text(encoding="utf-8") == "new-runtime"
+    _assert_mode_identity(live, 0o555)
+    _assert_mode_identity(live / "nested", 0o555)
+    assert not second_live.exists()
+    assert not list(rollback_engine.journal_root.glob("*.json*"))
+    assert not any(tmp_path.glob(".csk-txn-*"))
+    assert old_digest != new_digest
+
+
+def test_darwin_rename_thaw_negative_controls_do_not_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Non-directory sources, already-writable directories, and non-EACCES/EPERM errors are never retried; persistent retry failure restores the source mode and raises the original error.
+    home = tmp_path / "home"
+
+    # Control 1: regular read-only file hitting EACCES is not retried.
+    file_live = _write(tmp_path / "file-live", "old")
+    file_live.chmod(0o444)
+    file_desired = _write(tmp_path / "file-desired", "new")
+    file_desired.chmod(0o444)
+    file_attempts = _install_darwin_sealed_dir_rename_simulator(
+        monkeypatch, error_number=13, fail_always=True, fail_paths={file_live}
+    )
+    engine = TransactionEngine(home)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(
+                "txn-neg-file",
+                tmp_path / "project",
+                _target("10-context", "file-target", file_live, file_desired),
+            ),
+        )
+        with pytest.raises(PermissionError):
+            engine.commit(lock, "txn-neg-file")
+    assert len([src for src, _dst, _m in file_attempts if src == file_live]) == 1
+    _assert_mode_identity(file_live, 0o444)
+
+    # Control 2: already-writable directory hitting EACCES is not retried.
+    writable_live = tmp_path / "writable-live"
+    _write(writable_live / "payload", "old")
+    writable_desired = tmp_path / "writable-desired"
+    _write(writable_desired / "payload", "new")
+    writable_attempts = _install_darwin_sealed_dir_rename_simulator(
+        monkeypatch, error_number=13, fail_always=True, fail_paths={writable_live}
+    )
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(
+                "txn-neg-writable",
+                tmp_path / "project",
+                _target("20-runtime", "writable-dir", writable_live, writable_desired),
+            ),
+        )
+        with pytest.raises(PermissionError):
+            engine.commit(lock, "txn-neg-writable")
+    assert len([src for src, _dst, _m in writable_attempts if src == writable_live]) == 1
+
+    # Control 3: sealed 0555 directory hitting non-EACCES/EPERM error (EXDEV=18) is not retried.
+    exdev_live = tmp_path / "exdev-live"
+    exdev_desired = tmp_path / "exdev-desired"
+    _make_sealed_tree(exdev_live, "old")
+    _make_sealed_tree(exdev_desired, "new")
+    exdev_attempts = _install_darwin_sealed_dir_rename_simulator(
+        monkeypatch, error_number=18, fail_always=True, fail_paths={exdev_live}
+    )
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(
+                "txn-neg-exdev",
+                tmp_path / "project",
+                _target("20-runtime", "exdev-dir", exdev_live, exdev_desired),
+            ),
+        )
+        with pytest.raises(Exception) as exc_info:
+            engine.commit(lock, "txn-neg-exdev")
+    # EXDEV on live->backup was not retried.
+    assert len([src for src, _dst, _m in exdev_attempts if src == exdev_live]) == 1
+    _assert_mode_identity(exdev_live, 0o555)
+    assert exc_info.value is not None
+
+    # Control 4: sealed 0555 directory whose retry ALSO fails restores 0555 on source, preserves digest, and raises original EACCES.
+    fail_home = tmp_path / "fail-home"
+    fail_live = tmp_path / "fail-live"
+    fail_desired = tmp_path / "fail-desired"
+    _make_sealed_tree(fail_live, "keep-old")
+    _make_sealed_tree(fail_desired, "unused-new")
+    fail_live_digest = digest_path(fail_live)
+    fail_attempts: list[tuple[Path, Path, int]] = []
+    host_rename = (
+        transactions._windows_rename_no_replace
+        if transactions._is_windows()
+        else (
+            transactions._darwin_rename_no_replace
+            if sys.platform == "darwin"
+            else transactions._linux_rename_no_replace
+        )
+    )
+
+    def fail_live_twice_only(source: Path, destination: Path) -> None:
+        mode = stat.S_IMODE(source.lstat().st_mode)
+        fail_attempts.append((source, destination, mode))
+        if source == fail_live:
+            transactions._raise_posix_rename_error(13, source, destination)
+        if (
+            stat.S_ISDIR(source.lstat().st_mode)
+            and not stat.S_ISLNK(source.lstat().st_mode)
+            and not (mode & stat.S_IWUSR)
+        ):
+            transactions._raise_posix_rename_error(13, source, destination)
+        host_rename(source, destination)
+
+    monkeypatch.setattr(transactions, "_is_darwin", lambda: True)
+    monkeypatch.setattr(transactions, "_darwin_rename_no_replace", fail_live_twice_only)
+    fail_engine = TransactionEngine(fail_home)
+    with ManagerHomeLock(fail_home) as lock:
+        fail_engine.prepare(
+            lock,
+            _plan(
+                "txn-neg-retry-fails",
+                tmp_path / "project",
+                _target("20-runtime", "fail-dir", fail_live, fail_desired),
+            ),
+        )
+        with pytest.raises(PermissionError) as retry_exc:
+            fail_engine.commit(lock, "txn-neg-retry-fails")
+    assert retry_exc.value.errno == 13
+    assert len([src for src, _dst, _m in fail_attempts if src == fail_live]) == 2
+    assert digest_path(fail_live) == fail_live_digest
+    _assert_mode_identity(fail_live, 0o555)
+    assert not list(fail_engine.journal_root.glob("*.json*"))
+
+
+@pytest.mark.parametrize(
+    "fault_point",
+    [
+        "before_rename_thaw",
+        "after_rename_thaw",
+        "after_thawed_rename",
+        "after_rename_restore",
+    ],
+)
+@pytest.mark.parametrize("stage", ["commit", "cleanup"])
+def test_darwin_rename_thaw_crash_recovery_completes_without_catch22(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_point: str,
+    stage: str,
+):
+    # A crash at any write-ahead boundary between thaw and restore is recovered from pending_rename_thaw without hitting changed-cleanup-bytes.
+    home = tmp_path / "home"
+    live = tmp_path / "live"
+    desired = tmp_path / "desired"
+    _make_sealed_tree(live, "old")
+    _make_sealed_tree(desired, "new")
+    desired_digest = digest_path(desired)
+
+    _install_darwin_sealed_dir_rename_simulator(monkeypatch, error_number=13)
+    in_cleanup = False
+
+    def crash_on_point(point: str, _target: JournalTarget | None) -> None:
+        nonlocal in_cleanup
+        if point == "before_cleanup":
+            in_cleanup = True
+            return
+        if point == fault_point:
+            if (stage == "commit" and not in_cleanup) or (stage == "cleanup" and in_cleanup):
+                raise SimulatedCrash(f"{stage}:{fault_point}")
+
+    txn_id = f"txn-thaw-crash-{stage}-{fault_point}"
+    engine = TransactionEngine(home, fault_hook=crash_on_point)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(txn_id, tmp_path / "project", _target("20-runtime", "skill", live, desired)),
+        )
+        with pytest.raises(SimulatedCrash, match=f"{stage}:{fault_point}"):
+            engine.commit(lock, txn_id)
+
+    journal_path = engine.journal_root / f"{txn_id}.json"
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert "pending_rename_thaw" in raw
+    assert raw["pending_rename_thaw"]["original_mode"] == stat.S_IMODE(desired.lstat().st_mode)
+
+    with ManagerHomeLock(home) as lock:
+        TransactionEngine(home).recover(lock)
+
+    assert digest_path(live) == desired_digest
+    assert (live / "nested" / "payload").read_text(encoding="utf-8") == "new"
+    _assert_mode_identity(live, 0o555)
+    _assert_mode_identity(live / "nested", 0o555)
+    assert not journal_path.exists()
+    assert not any(tmp_path.glob(".csk-txn-*"))
+
+
+def test_darwin_rename_thaw_recovery_rejects_tampered_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Positive control: if a thawed tree is externally modified before recovery, digest verification after restore refuses with TransactionCorruptionError.
+    home = tmp_path / "home"
+    live = tmp_path / "live"
+    desired = tmp_path / "desired"
+    _make_sealed_tree(live, "old")
+    _make_sealed_tree(desired, "new")
+    _install_darwin_sealed_dir_rename_simulator(monkeypatch, error_number=13)
+
+    def crash_after_thaw(point: str, _target: JournalTarget | None) -> None:
+        if point == "after_rename_thaw":
+            raise SimulatedCrash(point)
+
+    engine = TransactionEngine(home, fault_hook=crash_after_thaw)
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan("txn-thaw-tamper", tmp_path / "project", _target("20-runtime", "skill", live, desired)),
+        )
+        with pytest.raises(SimulatedCrash, match="after_rename_thaw"):
+            engine.commit(lock, "txn-thaw-tamper")
+
+    # Tamper with the thawed directory by adding a foreign file before recovery.
+    (live / "foreign").write_text("tampered", encoding="utf-8")
+    with (
+        ManagerHomeLock(home) as lock,
+        pytest.raises(TransactionError, match="interrupted rename thaw changed tree digest"),
+    ):
+        TransactionEngine(home).recover(lock)
+    assert (engine.journal_root / "txn-thaw-tamper.json").exists()
+
+
+def test_pre_fix_rolling_back_journal_recovers_on_darwin_eacces_without_manual_chmod(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A legacy 0.22/0.23 journal left stuck in rolling_back with a sealed 0555 staged sidecar and no pending_rename_thaw field recovers cleanly on darwin EACCES without manual chmod.
+    home = tmp_path / "home"
+    live = tmp_path / "live"
+    desired = tmp_path / "desired"
+    _make_sealed_tree(live, "old-live")
+    _make_sealed_tree(desired, "new-desired")
+    old_digest = digest_path(live)
+
+    # Simulate a pre-fix 0.22/0.23 run: commit fails before backing up, rollback journals cleanup_sidecars and fails when tombing the 0555 .desired sidecar.
+    def crash_on_tomb_prepare(point: str, _target: JournalTarget | None) -> None:
+        if point == "cleanup_journaled":
+            raise SimulatedCrash("simulated-0230-tomb-eacces")
+
+    engine = TransactionEngine(home, fault_hook=crash_on_tomb_prepare)
+    txn_id = "txn-legacy-stuck-rolling-back"
+    with ManagerHomeLock(home) as lock:
+        engine.prepare(
+            lock,
+            _plan(txn_id, tmp_path / "project", _target("20-runtime", "skill-legacy", live, desired)),
+        )
+        journal = engine._load_journal(txn_id)
+        journal.phase = "rolling_back"
+        with engine._witness_scope(lock):
+            engine._save_journal(journal)
+            with pytest.raises(SimulatedCrash, match="simulated-0230-tomb-eacces"):
+                engine._rollback(journal)
+
+    journal_path = engine.journal_root / f"{txn_id}.json"
+    raw = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert raw["phase"] == "rolling_back"
+    assert "pending_rename_thaw" not in raw
+    assert any(
+        cleanup["role"] == "staged" and cleanup["state"] == "pending"
+        for cleanup in raw["cleanup_sidecars"]
+    )
+    staged_sidecar = Path(raw["targets"][0]["staged_path"])
+    assert staged_sidecar.is_dir()
+    _assert_mode_identity(staged_sidecar, 0o555)
+
+    # Now enable the macOS 15 EACCES simulator and recover with no manual chmod.
+    attempts = _install_darwin_sealed_dir_rename_simulator(monkeypatch, error_number=13)
+    with ManagerHomeLock(home) as lock:
+        TransactionEngine(home).recover(lock)
+
+    assert len([src for src, _dst, _m in attempts if src == staged_sidecar]) == 2
+    assert digest_path(live) == old_digest
+    assert (live / "nested" / "payload").read_text(encoding="utf-8") == "old-live"
+    _assert_mode_identity(live, 0o555)
+    assert not journal_path.exists()
+    assert not any(tmp_path.glob(".csk-txn-*"))

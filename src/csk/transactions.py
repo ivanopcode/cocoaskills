@@ -171,6 +171,16 @@ class JournalCleanupSidecar:
     writable_active: bool = False
 
 
+@dataclass(frozen=True)
+class RenameThawRecord:
+    target_index: int
+    source_path: str
+    destination_path: str
+    original_mode: int
+    thawed_mode: int
+    expected_digest: str
+
+
 @dataclass
 class Journal:
     schema: str
@@ -181,6 +191,7 @@ class Journal:
     generation_digests: dict[str, str]
     targets: list[JournalTarget]
     cleanup_sidecars: list[JournalCleanupSidecar]
+    pending_rename_thaw: RenameThawRecord | None = None
 
 
 @dataclass(frozen=True)
@@ -654,6 +665,7 @@ class TransactionEngine:
             self._resume_locked(journal)
 
     def _resume_locked(self, journal: Journal) -> None:
+        self._resolve_pending_rename_thaw(journal)
         if journal.phase == "preparing":
             self._discard_prepared(journal)
         elif journal.phase in {"prepared", "committing"}:
@@ -689,6 +701,8 @@ class TransactionEngine:
             for target in journal.targets:
                 self._commit_target(journal, target)
         except Exception as cause:
+            if journal.pending_rename_thaw is not None:
+                raise
             journal.phase = "rolling_back"
             self._save_journal(journal)
             try:
@@ -766,9 +780,15 @@ class TransactionEngine:
             else:
                 self._verify_expected_at(target, live)
                 if current != ABSENT_DIGEST:
-                    self._assert_mutation_witness()
-                    self._run_pre_write_hook(target)
-                    _rename_no_replace(live, backup)
+                    self._rename_target_no_replace(
+                        journal,
+                        target,
+                        live,
+                        backup,
+                        expected_digest=current,
+                        run_pre_write_hook=True,
+                        convert_exists_to_corruption=True,
+                    )
                     _sync_tree(backup)
                     self._assert_mutation_witness()
                     captured = _target_digest(target, backup)
@@ -801,9 +821,15 @@ class TransactionEngine:
                     raise TransactionCorruptionError(
                         f"staged target changed: {target.target_class}/{target.identifier}"
                     )
-                self._assert_mutation_witness()
-                self._run_pre_write_hook(target)
-                _rename_no_replace(staged, live)
+                self._rename_target_no_replace(
+                    journal,
+                    target,
+                    staged,
+                    live,
+                    expected_digest=target.desired_digest,
+                    run_pre_write_hook=True,
+                    convert_exists_to_corruption=True,
+                )
                 _sync_tree(live)
                 self._assert_mutation_witness()
             self._emit("after_install", target)
@@ -907,6 +933,7 @@ class TransactionEngine:
         self._save_journal(journal)
 
     def _rollback(self, journal: Journal) -> None:
+        self._resolve_pending_rename_thaw(journal)
         journal.phase = "rolling_back"
         self._save_journal(journal)
         for target in reversed(journal.targets):
@@ -987,10 +1014,15 @@ class TransactionEngine:
                 raise TransactionCorruptionError(
                     f"rollback refused unknown current bytes: {target.target_class}/{target.identifier}"
                 )
-            self._assert_mutation_witness()
-            self._run_pre_write_hook(target)
-            _rename_no_replace(live, rollback)
-            self._assert_mutation_witness()
+            self._rename_target_no_replace(
+                journal,
+                target,
+                live,
+                rollback,
+                expected_digest=target.desired_digest,
+                run_pre_write_hook=True,
+                convert_exists_to_corruption=True,
+            )
             rollback_digest = _target_digest(target, rollback)
             if rollback_digest != target.desired_digest:
                 raise TransactionCorruptionError(
@@ -1022,9 +1054,15 @@ class TransactionEngine:
                 raise TransactionCorruptionError(
                     f"rollback refused to overwrite live bytes: {target.target_class}/{target.identifier}"
                 )
-            self._assert_mutation_witness()
-            self._run_pre_write_hook(target)
-            _rename_no_replace(backup, live)
+            self._rename_target_no_replace(
+                journal,
+                target,
+                backup,
+                live,
+                expected_digest=expected_backup,
+                run_pre_write_hook=True,
+                convert_exists_to_corruption=True,
+            )
             _sync_tree(live)
             self._assert_mutation_witness()
         self._emit("after_restore", target)
@@ -1510,6 +1548,230 @@ class TransactionEngine:
                 "cleanup journal has incomplete target state"
             )
         self._validate_cleanup_sidecars(journal)
+        self._validate_pending_rename_thaw(journal)
+
+    def _validate_pending_rename_thaw(self, journal: Journal) -> None:
+        record = journal.pending_rename_thaw
+        if record is None:
+            return
+        if (
+            not isinstance(record, RenameThawRecord)
+            or not isinstance(record.target_index, int)
+            or isinstance(record.target_index, bool)
+            or not 0 <= record.target_index < len(journal.targets)
+            or not isinstance(record.source_path, str)
+            or not isinstance(record.destination_path, str)
+            or not isinstance(record.original_mode, int)
+            or isinstance(record.original_mode, bool)
+            or not 0 <= record.original_mode <= 0o7777
+            or bool(record.original_mode & stat.S_IWUSR)
+            or not isinstance(record.thawed_mode, int)
+            or isinstance(record.thawed_mode, bool)
+            or record.thawed_mode != (record.original_mode | stat.S_IWUSR)
+            or not isinstance(record.expected_digest, str)
+            or record.expected_digest == ABSENT_DIGEST
+        ):
+            raise TransactionCorruptionError(
+                "journal pending rename thaw metadata is invalid"
+            )
+        _validate_digest(record.expected_digest, "pending rename thaw digest")
+        target = journal.targets[record.target_index]
+        pair = (record.source_path, record.destination_path)
+        if journal.cleanup_sidecars:
+            if journal.phase not in {"preparing", "prepared", "cleanup", "rolling_back"}:
+                raise TransactionCorruptionError(
+                    "journal pending rename thaw is invalid for phase"
+                )
+            matched = any(
+                cleanup.target_index == record.target_index
+                and cleanup.state == "pending"
+                and (cleanup.path, cleanup.tomb_path) == pair
+                and cleanup.expected_digest == record.expected_digest
+                for cleanup in journal.cleanup_sidecars
+            )
+            if not matched:
+                raise TransactionCorruptionError(
+                    "journal pending rename thaw does not match pending cleanup sidecar"
+                )
+            return
+        if journal.phase == "committing":
+            if target.state == "pending":
+                if pair != (target.live_path, target.backup_path) or (
+                    target.expected_preimage_digest is not None
+                    and record.expected_digest != target.expected_preimage_digest
+                ):
+                    raise TransactionCorruptionError(
+                        "journal pending rename thaw does not match backup rename"
+                    )
+                return
+            if target.state == "backed_up":
+                if (
+                    target.staged_path is None
+                    or pair != (target.staged_path, target.live_path)
+                    or record.expected_digest != target.desired_digest
+                ):
+                    raise TransactionCorruptionError(
+                        "journal pending rename thaw does not match publish rename"
+                    )
+                return
+            raise TransactionCorruptionError(
+                "journal pending rename thaw is invalid for target commit state"
+            )
+        if journal.phase == "rolling_back":
+            if target.state in {"backed_up", "committed"}:
+                if (
+                    pair == (target.live_path, target.rollback_path)
+                    and record.expected_digest == target.desired_digest
+                ):
+                    return
+                if (
+                    pair == (target.backup_path, target.live_path)
+                    and target.backup_digest is not None
+                    and record.expected_digest == target.backup_digest
+                ):
+                    return
+            raise TransactionCorruptionError(
+                "journal pending rename thaw does not match rollback rename"
+            )
+        raise TransactionCorruptionError(
+            "journal pending rename thaw is invalid for journal phase"
+        )
+
+    def _resolve_pending_rename_thaw(self, journal: Journal) -> None:
+        record = journal.pending_rename_thaw
+        if record is None:
+            return
+        self._assert_mutation_witness()
+        target = journal.targets[record.target_index]
+        source = Path(record.source_path)
+        destination = Path(record.destination_path)
+        if (
+            record.source_path == target.live_path
+            or record.destination_path == target.live_path
+        ):
+            self._run_pre_write_hook(target)
+        source_exists = _path_exists(source)
+        destination_exists = _path_exists(destination)
+        if source_exists and destination_exists:
+            raise TransactionCorruptionError(
+                "interrupted rename thaw has both source and destination: "
+                f"{source} -> {destination}"
+            )
+        if not source_exists and not destination_exists:
+            raise TransactionCorruptionError(
+                "interrupted rename thaw target disappeared: "
+                f"{source} -> {destination}"
+            )
+        present = destination if destination_exists else source
+        _set_directory_mode_durably(
+            present,
+            record.original_mode,
+            allowed_modes={record.original_mode, record.thawed_mode},
+        )
+        if _target_digest(target, present) != record.expected_digest:
+            raise TransactionCorruptionError(
+                f"interrupted rename thaw changed tree digest: {present}"
+            )
+        journal.pending_rename_thaw = None
+        self._save_journal(journal)
+        self._emit("rename_thaw_recovered", target)
+
+    def _rename_target_no_replace(
+        self,
+        journal: Journal,
+        target: JournalTarget,
+        source: Path,
+        destination: Path,
+        *,
+        expected_digest: str,
+        run_pre_write_hook: bool,
+        convert_exists_to_corruption: bool,
+    ) -> None:
+        target_index = next(
+            index
+            for index, candidate in enumerate(journal.targets)
+            if candidate is target
+        )
+        self._assert_mutation_witness()
+        if run_pre_write_hook:
+            self._run_pre_write_hook(target)
+        try:
+            _native_rename_no_replace(source, destination)
+        except FileExistsError as exc:
+            if convert_exists_to_corruption:
+                raise TransactionCorruptionError(
+                    f"transaction destination exists: {destination}"
+                ) from exc
+            raise
+        except OSError as original_error:
+            if not _should_retry_darwin_directory_rename(source, original_error):
+                raise
+            before = source.lstat()
+            original_mode = stat.S_IMODE(before.st_mode)
+            thawed_mode = original_mode | stat.S_IWUSR
+            journal.pending_rename_thaw = RenameThawRecord(
+                target_index=target_index,
+                source_path=str(source),
+                destination_path=str(destination),
+                original_mode=original_mode,
+                thawed_mode=thawed_mode,
+                expected_digest=expected_digest,
+            )
+            self._save_journal(journal)
+            self._emit("before_rename_thaw", target)
+            _set_directory_mode_durably(
+                source,
+                thawed_mode,
+                allowed_modes={original_mode, thawed_mode},
+            )
+            self._emit("after_rename_thaw", target)
+            self._assert_mutation_witness()
+            if run_pre_write_hook:
+                self._run_pre_write_hook(target)
+            try:
+                _native_rename_no_replace(source, destination)
+            except Exception as retry_error:
+                _set_directory_mode_durably(
+                    source,
+                    original_mode,
+                    allowed_modes={original_mode, thawed_mode},
+                )
+                if _target_digest(target, source) != expected_digest:
+                    raise TransactionCorruptionError(
+                        f"transaction target changed during failed rename thaw: {source}"
+                    ) from retry_error
+                journal.pending_rename_thaw = None
+                self._save_journal(journal)
+                if isinstance(retry_error, FileExistsError):
+                    if convert_exists_to_corruption:
+                        raise TransactionCorruptionError(
+                            f"transaction destination exists: {destination}"
+                        ) from retry_error
+                    raise
+                raise original_error from None
+            _sync_directory(destination.parent)
+            if source.parent != destination.parent:
+                _sync_directory(source.parent)
+            self._emit("after_thawed_rename", target)
+            self._assert_mutation_witness()
+            _set_directory_mode_durably(
+                destination,
+                original_mode,
+                allowed_modes={original_mode, thawed_mode},
+            )
+            self._emit("after_rename_restore", target)
+            if _target_digest(target, destination) != expected_digest:
+                raise TransactionCorruptionError(
+                    f"transaction target changed during rename thaw: {destination}"
+                )
+            journal.pending_rename_thaw = None
+            self._save_journal(journal)
+            self._assert_mutation_witness()
+            return
+        _sync_directory(destination.parent)
+        if source.parent != destination.parent:
+            _sync_directory(source.parent)
+        self._assert_mutation_witness()
 
     def _validate_cleanup_sidecars(self, journal: Journal) -> None:
         if not isinstance(journal.cleanup_sidecars, list):
@@ -1613,6 +1875,7 @@ class TransactionEngine:
                 )
 
     def _discard_prepared(self, journal: Journal) -> None:
+        self._resolve_pending_rename_thaw(journal)
         if not journal.cleanup_sidecars:
             self._validate_preparing_staging(journal)
         self._remove_journal(journal)
@@ -1706,8 +1969,15 @@ class TransactionEngine:
                         allow_partial=False,
                     )
                     try:
-                        self._assert_mutation_witness()
-                        _durable_journal_publish_no_replace(path, tomb)
+                        self._rename_target_no_replace(
+                            journal,
+                            target,
+                            path,
+                            tomb,
+                            expected_digest=cleanup.expected_digest,
+                            run_pre_write_hook=False,
+                            convert_exists_to_corruption=False,
+                        )
                     except FileExistsError as exc:
                         raise TransactionCorruptionError(
                             f"cleanup tomb already exists: {tomb}"
@@ -1889,6 +2159,10 @@ class TransactionEngine:
             ready = states <= {"pending", "rolled_back"}
         else:
             ready = False
+        if journal.pending_rename_thaw is not None:
+            raise TransactionCorruptionError(
+                f"journal has unresolved rename thaw: {journal.transaction_id}"
+            )
         if not ready:
             raise TransactionCorruptionError(
                 f"journal is not ready for durable removal: {journal.transaction_id}"
@@ -2280,6 +2554,10 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
+def _is_darwin() -> bool:
+    return not _is_windows() and sys.platform == "darwin"
+
+
 def _permission_mode_identity(mode: int) -> int:
     if _is_windows():
         # Windows chmod can only change the read-only attribute. The remaining
@@ -2344,10 +2622,7 @@ def _sync_directory(path: Path) -> None:
 
 
 def _durable_journal_publish_no_replace(source: Path, destination: Path) -> None:
-    if _is_windows():
-        _windows_move_file(source, destination, _MOVEFILE_WRITE_THROUGH)
-    else:
-        _native_rename_no_replace(source, destination)
+    _native_rename_no_replace(source, destination)
     _sync_directory(destination.parent)
     if source.parent != destination.parent:
         _sync_directory(source.parent)
@@ -2381,16 +2656,105 @@ def _rename_no_replace(source: Path, destination: Path) -> None:
 
 def _native_rename_no_replace(source: Path, destination: Path) -> None:
     """Atomically rename without replacing a competing destination."""
+    if _is_darwin():
+        _darwin_rename_no_replace(source, destination)
+        return
     if _is_windows():
         _windows_rename_no_replace(source, destination)
-        return
-    if sys.platform == "darwin":
-        _darwin_rename_no_replace(source, destination)
         return
     if sys.platform.startswith("linux"):
         _linux_rename_no_replace(source, destination)
         return
     raise TransactionError(f"atomic no-replace rename is unsupported on {sys.platform}")
+
+
+def _should_retry_darwin_directory_rename(source: Path, exc: OSError) -> bool:
+    """Return whether a darwin rename failure should trigger single-directory thaw.
+
+    Only real non-symlink directories lacking owner write permission on macOS
+    that failed with EACCES or EPERM qualify.
+    """
+    if not _is_darwin():
+        return False
+    if exc.errno not in {errno.EACCES, errno.EPERM}:
+        return False
+    try:
+        info = source.lstat()
+    except OSError:
+        return False
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        return False
+    return not bool(stat.S_IMODE(info.st_mode) & stat.S_IWUSR)
+
+
+def _set_directory_mode_durably(
+    path: Path,
+    mode: int,
+    *,
+    allowed_modes: set[int],
+) -> None:
+    """Durably transition one non-symlink directory's mode under inode witness."""
+    try:
+        before = path.lstat()
+    except FileNotFoundError as exc:
+        raise TransactionCorruptionError(
+            f"transaction directory disappeared before mode change: {path}"
+        ) from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+        raise TransactionCorruptionError(
+            f"transaction directory mode target is not a real directory: {path}"
+        )
+    if not _permission_mode_is_allowed(stat.S_IMODE(before.st_mode), allowed_modes):
+        raise TransactionCorruptionError(
+            f"transaction directory mode changed unexpectedly: {path}"
+        )
+    if _is_windows():
+        if not _permission_mode_is_allowed(stat.S_IMODE(before.st_mode), {mode}):
+            path.chmod(mode)
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+            or not os.path.samestat(before, current)
+            or not _permission_mode_is_allowed(stat.S_IMODE(current.st_mode), {mode})
+        ):
+            raise TransactionCorruptionError(
+                f"transaction directory changed while setting mode: {path}"
+            )
+        _sync_directory(path)
+        _sync_directory(path.parent)
+        return
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    witness_fd = os.open(path, os.O_RDONLY | no_follow)
+    try:
+        opened = os.fstat(witness_fd)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not os.path.samestat(before, opened)
+            or not _permission_mode_is_allowed(
+                stat.S_IMODE(opened.st_mode), allowed_modes
+            )
+        ):
+            raise TransactionCorruptionError(
+                f"transaction directory changed while opening: {path}"
+            )
+        if stat.S_IMODE(opened.st_mode) != mode:
+            path.chmod(mode)
+        current = path.lstat()
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+            or not os.path.samestat(opened, current)
+            or stat.S_IMODE(current.st_mode) != mode
+        ):
+            raise TransactionCorruptionError(
+                f"transaction directory changed while setting mode: {path}"
+            )
+        os.fsync(witness_fd)
+    finally:
+        os.close(witness_fd)
+    _sync_directory(path.parent)
 
 
 def _darwin_rename_no_replace(source: Path, destination: Path) -> None:
@@ -4069,16 +4433,19 @@ def _validate_recheck_payload(
 
 
 def _journal_bytes(journal: Journal) -> bytes:
+    payload = asdict(journal)
+    if journal.pending_rename_thaw is None:
+        payload.pop("pending_rename_thaw", None)
     return (
         json.dumps(
-            asdict(journal), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         + b"\n"
     )
 
 
 def _journal_from_dict(raw: object) -> Journal:
-    if not isinstance(raw, dict) or set(raw) != {
+    base_fields = {
         "schema",
         "transaction_id",
         "project_identity",
@@ -4087,8 +4454,19 @@ def _journal_from_dict(raw: object) -> Journal:
         "generation_digests",
         "targets",
         "cleanup_sidecars",
-    }:
+    }
+    if not isinstance(raw, dict) or set(raw) not in (
+        base_fields,
+        base_fields | {"pending_rename_thaw"},
+    ):
         raise ValueError("journal fields are invalid")
+    pending_rename_thaw: RenameThawRecord | None = None
+    if "pending_rename_thaw" in raw:
+        thaw_raw = raw["pending_rename_thaw"]
+        expected_thaw_fields = set(RenameThawRecord.__dataclass_fields__)
+        if not isinstance(thaw_raw, dict) or set(thaw_raw) != expected_thaw_fields:
+            raise ValueError("journal pending rename thaw fields are invalid")
+        pending_rename_thaw = RenameThawRecord(**thaw_raw)
     targets_raw = raw["targets"]
     if not isinstance(targets_raw, list):
         raise TypeError("journal targets are invalid")
@@ -4169,6 +4547,7 @@ def _journal_from_dict(raw: object) -> Journal:
         generation_digests=generations,
         targets=targets,
         cleanup_sidecars=cleanup_sidecars,
+        pending_rename_thaw=pending_rename_thaw,
     )
 
 

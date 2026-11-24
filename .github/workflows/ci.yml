@@ -731,7 +731,7 @@ jobs:
   fast:
     name: fast
     if: ${{ always() && github.event_name == 'pull_request' }}
-    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e, fast_draft_sources, floor_syntax]
+    needs: [typecheck, build, fast_ordinary, fast_protocol, fast_go_e2e, fast_draft_sources, floor_syntax, macos_15_sealed_rename]
     runs-on: ubuntu-latest
     steps:
       - name: Require every fast child
@@ -742,7 +742,7 @@ jobs:
           import json
           import os
 
-          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e", "fast_draft_sources", "floor_syntax"}
+          expected = {"typecheck", "build", "fast_ordinary", "fast_protocol", "fast_go_e2e", "fast_draft_sources", "floor_syntax", "macos_15_sealed_rename"}
           actual = json.loads(os.environ["NEEDS_JSON"])
           if set(actual) != expected:
               raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")
@@ -1220,10 +1220,93 @@ jobs:
           path: draft-sources-results.xml
           if-no-files-found: error
 
+  macos_15_sealed_rename:
+    name: macOS 15 sealed-tree rename / Python 3.14
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+          allow-prereleases: true
+
+      - name: Configure git (POSIX)
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Probe macOS 15 renamex_np semantics on 0555 directories
+        run: |
+          sw_vers
+          uname -a
+          python - <<'PY'
+          import ctypes, errno, os, stat, tempfile
+
+          libc = ctypes.CDLL(None, use_errno=True)
+          libc.renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+          libc.renamex_np.restype = ctypes.c_int
+
+          with tempfile.TemporaryDirectory() as td:
+              src = os.path.join(td, "sealed-src")
+              same_dst = os.path.join(td, "sealed-same")
+              other_parent = os.path.join(td, "other-parent")
+              os.makedirs(os.path.join(src, "nested"))
+              os.makedirs(other_parent)
+              with open(os.path.join(src, "nested", "payload"), "w", encoding="utf-8") as handle:
+                  handle.write("probe\n")
+              os.chmod(os.path.join(src, "nested", "payload"), 0o444)
+              os.chmod(os.path.join(src, "nested"), 0o555)
+              os.chmod(src, 0o555)
+
+              ctypes.set_errno(0)
+              same_rc = libc.renamex_np(os.fsencode(src), os.fsencode(same_dst), 0x00000004)
+              same_err = ctypes.get_errno()
+              print(
+                  f"probe same-parent 0555 renamex_np(0x4): rc={same_rc} "
+                  f"errno={same_err} ({errno.errorcode.get(same_err, 'OK')})"
+              )
+
+              current = same_dst if same_rc == 0 else src
+              cross_dst = os.path.join(other_parent, "sealed-cross")
+              ctypes.set_errno(0)
+              cross_rc = libc.renamex_np(os.fsencode(current), os.fsencode(cross_dst), 0x00000004)
+              cross_err = ctypes.get_errno()
+              print(
+                  f"probe cross-parent 0555 renamex_np(0x4): rc={cross_rc} "
+                  f"errno={cross_err} ({errno.errorcode.get(cross_err, 'OK')})"
+              )
+
+              final_dir = cross_dst if cross_rc == 0 else current
+              os.chmod(final_dir, stat.S_IMODE(os.lstat(final_dir).st_mode) | stat.S_IWUSR)
+              nested = os.path.join(final_dir, "nested")
+              os.chmod(nested, stat.S_IMODE(os.lstat(nested).st_mode) | stat.S_IWUSR)
+          PY
+
+      - name: Run targeted transaction and runtime-tree tests
+        run: >-
+          python -m pytest -v
+          tests/test_transactions.py tests/test_runtime_tree_writes.py
+          --basetemp="${{ runner.temp }}/csk-macos15"
+          -o cache_dir="${{ runner.temp }}/csk-macos15-cache"
+
   merge:
     name: merge
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    needs: [typecheck, build, merge_ordinary, merge_protocol, merge_go_e2e, merge_draft_sources]
+    needs: [typecheck, build, merge_ordinary, merge_protocol, merge_go_e2e, merge_draft_sources, macos_15_sealed_rename]
     runs-on: ubuntu-latest
     steps:
       - name: Require every merge child
@@ -1234,7 +1317,7 @@ jobs:
           import json
           import os
 
-          expected = {"typecheck", "build", "merge_ordinary", "merge_protocol", "merge_go_e2e", "merge_draft_sources"}
+          expected = {"typecheck", "build", "merge_ordinary", "merge_protocol", "merge_go_e2e", "merge_draft_sources", "macos_15_sealed_rename"}
           actual = json.loads(os.environ["NEEDS_JSON"])
           if set(actual) != expected:
               raise SystemExit(f"required CI child mismatch: expected={sorted(expected)} actual={sorted(actual)}")

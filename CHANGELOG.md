@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to repair an already-invalid scope entry written by an earlier release, and
   include the config path and `projects.<alias>` key in invalid project-alias
   load errors.
+- Handle macOS `renamex_np` `EACCES`/`EPERM` failures on read-only (`0555`)
+  directory targets and cleanup sidecars inside the transaction engine via a
+  write-ahead journaled, single-directory owner-write thaw, atomic rename retry,
+  durable mode restoration, and post-restore digest verification, allowing
+  sealed runtime publication, rollback, and recovery of journals left in
+  `rolling_back` by earlier releases to complete without manual `chmod`.
 
 ## [0.23.1] - 2026-11-23
 
