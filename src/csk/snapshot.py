@@ -12,8 +12,11 @@ CACHE_DIRNAME = "cache"
 SNAPSHOT_DIRNAME = "snapshot"
 REGISTRY_CACHE_DIRNAME = "registry"
 RESERVED_CACHE_TOPLEVEL = frozenset({REGISTRY_CACHE_DIRNAME})
+IGNORED_METADATA_NAMES = frozenset({".DS_Store"})
+SNAPSHOT_ROOT_MARKER_FILES = frozenset({"SKILL.md", "csk-skill.json", "agent-skill.json"})
 SNAPSHOT_TMP_PREFIX = ".snapshot-"
 SNAPSHOT_TMP_SUFFIX = ".tmp"
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 
 def _snapshot_tmp_name(commit: str) -> str:
@@ -26,6 +29,24 @@ def _is_snapshot_tmp_name(name: str) -> bool:
         and name.startswith(SNAPSHOT_TMP_PREFIX)
         and name.endswith(SNAPSHOT_TMP_SUFFIX)
     )
+
+
+def _is_git_commit_hex(name: str) -> bool:
+    return len(name) in {40, 64} and all(ch in _HEX_DIGITS for ch in name)
+
+
+def _looks_like_snapshot_content_root(snap_path: Path, parent_name: str) -> bool:
+    """Return True when ``snap_path`` looks like an archived skill tree, not a source segment."""
+    if _is_git_commit_hex(parent_name):
+        return True
+    for marker_name in SNAPSHOT_ROOT_MARKER_FILES:
+        try:
+            info = (snap_path / marker_name).lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode):
+            return True
+    return False
 
 
 class SnapshotError(Exception):
@@ -47,6 +68,8 @@ def snapshot_dir(csk_home: Path, source: str, commit: str) -> Path:
 
 def iter_snapshot_entries(
     csk_home: Path,
+    *,
+    include_reserved: bool = False,
 ) -> tuple[list[SnapshotEntry], list[str]]:
     """Walk ``cache/<source>/<commit>/snapshot`` without descending into snapshot trees.
 
@@ -54,7 +77,10 @@ def iter_snapshot_entries(
     descended into, so directories named ``snapshot`` inside a skill's own
     content can never become GC candidates or shadow another commit's snapshot.
     Non-directory or shallow ``snapshot`` entries and symbolic links are
-    retained with warnings instead of raising.
+    retained with warnings instead of raising. ``include_reserved`` is for
+    read-only lookups only (e.g. legacy runtime validation of a skill literally
+    named ``registry``); garbage collection leaves it ``False`` so
+    ``cache/registry`` is never pruned.
     """
     cache_root = csk_home / CACHE_DIRNAME
     try:
@@ -87,9 +113,9 @@ def iter_snapshot_entries(
         staging_dirs: list[Path] = []
         other_names: list[str] = []
         for child in children:
-            if not rel_parts and child.name in RESERVED_CACHE_TOPLEVEL:
+            if not include_reserved and not rel_parts and child.name in RESERVED_CACHE_TOPLEVEL:
                 # cache/registry is owned by the audit-registry HTTP cache, not
-                # the snapshot cache; never inspect, warn on, or prune it.
+                # the snapshot cache; never inspect, warn on, or prune it during GC.
                 continue
             try:
                 info = child.lstat()
@@ -114,6 +140,8 @@ def iter_snapshot_entries(
                 else:
                     real_subdirs.append(child)
                 other_names.append(child.name)
+                continue
+            if child.name in IGNORED_METADATA_NAMES and stat.S_ISREG(info.st_mode):
                 continue
             other_names.append(child.name)
 
@@ -154,6 +182,86 @@ def iter_snapshot_entries(
             pending.append((subdir, (*rel_parts, subdir.name)))
 
     return entries, warnings
+
+
+def find_snapshot_for_commit(
+    csk_home: Path,
+    commit: str,
+    *,
+    preferred_source: str | None = None,
+) -> Path | None:
+    """Read-only lookup of a retained source snapshot matching ``commit``.
+
+    Uses :func:`iter_snapshot_entries` with ``include_reserved=True`` (without
+    filtering on siblings) so skills named ``registry`` and snapshots with
+    adjacent metadata or sibling directories are always found. If no primary
+    match exists, falls back to walking source paths whose own path contains a
+    ``snapshot`` segment, without ever descending into a real skill snapshot
+    content tree or following symbolic links.
+    """
+    entries, _warnings = iter_snapshot_entries(csk_home, include_reserved=True)
+    fallback_match: Path | None = None
+    for entry in entries:
+        if entry.commit != commit:
+            continue
+        if preferred_source is not None and entry.source == preferred_source:
+            return entry.snapshot_dir
+        if fallback_match is None:
+            fallback_match = entry.snapshot_dir
+    if fallback_match is not None:
+        return fallback_match
+
+    cache_root = csk_home / CACHE_DIRNAME
+    try:
+        root_info = cache_root.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        return None
+
+    # Fallback for source paths containing a `snapshot` segment (e.g.
+    # snapshot/<skill>/<commit>/snapshot, host/snapshot/repo/<commit>/snapshot,
+    # org/team/snapshot/<commit>/snapshot). Never descend into a real skill
+    # snapshot root (identified by commit-hex parent or root SKILL.md/manifest)
+    # or into staging directories or symbolic links.
+    pending: list[tuple[Path, tuple[str, ...]]] = [(cache_root, ())]
+    best: Path | None = None
+    while pending:
+        current, rel_parts = pending.pop()
+        try:
+            children = sorted(
+                current.iterdir(),
+                key=lambda item: item.name.encode("utf-8"),
+            )
+        except OSError:
+            continue
+        real_subdirs: list[Path] = []
+        for child in children:
+            try:
+                info = child.lstat()
+            except OSError:
+                continue
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                continue
+            if _is_snapshot_tmp_name(child.name):
+                continue
+            if child.name == SNAPSHOT_DIRNAME:
+                if len(rel_parts) >= 2 and rel_parts[-1] == commit:
+                    source = "/".join(rel_parts[:-1])
+                    if preferred_source is not None and source == preferred_source:
+                        return child
+                    if best is None:
+                        best = child
+                    continue
+                if len(rel_parts) < 2 or not _looks_like_snapshot_content_root(
+                    child, rel_parts[-1]
+                ):
+                    real_subdirs.append(child)
+                continue
+            real_subdirs.append(child)
+        for subdir in reversed(real_subdirs):
+            pending.append((subdir, (*rel_parts, subdir.name)))
+    return best
 
 
 def get_snapshot(csk_home: Path, source: str, repo: Path, commit: str) -> Path:

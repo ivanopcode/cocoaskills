@@ -18,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without descending into snapshot contents, staging directories, `cache/registry`,
   or symbolic links, so live snapshots whose repositories contain a `snapshot/`
   directory are never deleted by GC or shadowed during legacy runtime inventory
-  validation. Shallow or malformed `snapshot` entries and source paths containing
-  a `snapshot` segment are retained with a warning instead of crashing or deleting
-  live snapshots or sibling sources.
+  validation. Ignore `.DS_Store` metadata siblings, retain shallow or malformed
+  `snapshot` entries and source paths containing a `snapshot` segment with a
+  warning during GC, and keep read-only legacy runtime lookups working for
+  skills named `registry`, snapshots with adjacent files, and sources with a
+  `snapshot` segment.
 
 ## [0.23.1] - 2026-11-23
 

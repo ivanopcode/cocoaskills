@@ -548,10 +548,19 @@ def test_validate_legacy_runtime_ignores_nested_snapshot_content_decoy(tmp_path,
     )
     bin_name = "tool.cmd" if os.name == "nt" else "tool"
 
-    # Create a decoy <commit>/snapshot nested inside another snapshot's tree.
+    # Create decoy <commit>/snapshot trees nested inside other skill snapshots:
+    # both under a 40-hex commit dir and under a non-hex commit dir with SKILL.md.
+    other_hex_snap = csk_home / "cache" / "other-hex" / ("a" * 40) / "snapshot"
+    decoy_hex = other_hex_snap / "c_target" / "snapshot"
+    (decoy_hex / "scripts").mkdir(parents=True)
+    (decoy_hex / "csk-skill.json").write_text(manifest, encoding="utf-8")
+    (decoy_hex / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+    (decoy_hex / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
+
     other_snap = csk_home / "cache" / "other" / "c_other" / "snapshot"
     decoy = other_snap / "c_target" / "snapshot"
     (decoy / "scripts").mkdir(parents=True)
+    (other_snap / "SKILL.md").write_text("---\nname: other\n---\n", encoding="utf-8")
     (decoy / "csk-skill.json").write_text(manifest, encoding="utf-8")
     (decoy / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
     (decoy / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
@@ -617,3 +626,104 @@ def test_collect_snapshots_does_not_descend_into_staging_tmp_dirs(csk_home):
     assert not real_stale.parent.exists()
     assert (orphan_tmp / "snapshot" / "inside.txt").is_file()
     assert any(str(orphan_tmp) in w for w in warnings)
+
+
+def test_validate_legacy_runtime_and_install_succeed_with_ds_store_registry_skill_and_snapshot_segment(
+    tmp_path, skills_root, csk_home
+):
+    # Legacy runtime lookup succeeds when a snapshot commit dir has a .DS_Store or extra sibling, when a skill is named `registry`, or when a source path contains a `snapshot` segment; GC also collects stale snapshots with .DS_Store cleanly.
+    from csk import published_trees
+
+    manifest = json.dumps(
+        {
+            "schema_version": 1,
+            "commands": {
+                "tool": {
+                    "type": "script",
+                    "unix_path": "scripts/tool",
+                    "win_path": "scripts/tool.cmd",
+                }
+            },
+        }
+    )
+    bin_name = "tool.cmd" if os.name == "nt" else "tool"
+
+    def write_snap(snap_dir: Path) -> None:
+        (snap_dir / "scripts").mkdir(parents=True)
+        (snap_dir / "SKILL.md").write_text("---\nname: s\n---\n", encoding="utf-8")
+        (snap_dir / "csk-skill.json").write_text(manifest, encoding="utf-8")
+        (snap_dir / "scripts" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+        (snap_dir / "scripts" / "tool.cmd").write_text("@echo off\r\n", encoding="utf-8")
+
+    def write_runtime(skill: str, commit: str) -> Path:
+        rt = csk_home / "runtime" / skill / commit
+        (rt / "bin").mkdir(parents=True)
+        (rt / "bin" / bin_name).write_text("#!/bin/sh\n", encoding="utf-8")
+        return rt
+
+    # 1. Skill named `registry` (cache/registry/<commit>/snapshot) is found by read-only lookup.
+    reg_commit = "1" * 40
+    write_snap(csk_home / "cache" / "registry" / reg_commit / "snapshot")
+    published_trees.validate_legacy_runtime(write_runtime("registry", reg_commit), home=csk_home)
+
+    # 2. Sources with a `snapshot` segment at depth 0, 1, and 2 are found by read-only lookup.
+    for idx, source_parts in enumerate(
+        (
+            ("snapshot", "skill-d0"),
+            ("host", "snapshot", "repo"),
+            ("org", "team", "snapshot"),
+        ),
+        start=2,
+    ):
+        cmt = str(idx) * 40
+        write_snap(csk_home.joinpath("cache", *source_parts, cmt, "snapshot"))
+        published_trees.validate_legacy_runtime(
+            write_runtime(f"snap-seg-{idx}", cmt), home=csk_home
+        )
+
+    # 3. Snapshot with arbitrary unexpected sibling still passes read-only lookup.
+    sib_commit = "5" * 40
+    sib_snap = csk_home / "cache" / "with-sibling" / sib_commit / "snapshot"
+    write_snap(sib_snap)
+    (sib_snap.parent / "extra-note.txt").write_text("note", encoding="utf-8")
+    published_trees.validate_legacy_runtime(write_runtime("with-sibling", sib_commit), home=csk_home)
+
+    # 4. End-to-end install succeeds when a live legacy runtime snapshot has a `.DS_Store` sibling,
+    #    and a stale snapshot containing `.DS_Store` is collected without warnings.
+    project = make_project(tmp_path, "ds-store-proj")
+    make_skill_repo(
+        skills_root,
+        "skill-ds",
+        {
+            "csk-skill.json": manifest,
+            "scripts/tool": "#!/bin/sh\n",
+            "scripts/tool.cmd": "@echo off\r\n",
+        },
+        tag="v1",
+    )
+    write_skillfile(project, {"schema_version": 1, "skills": [{"name": "skill-ds", "tag": "v1"}]})
+    cfg = make_config(csk_home, skills_root, project)
+    assert not installer.install(cfg)[0].errors
+
+    live_commit_dir = next((csk_home / "cache" / "skill-ds").iterdir())
+    (live_commit_dir / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1")
+
+    stale_ds = csk_home / "cache" / "stale-ds" / ("6" * 40) / "snapshot"
+    stale_ds.mkdir(parents=True)
+    (stale_ds.parent / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1")
+
+    # Second install runs validate_legacy_store over every runtime generation AND post-install GC.
+    result = installer.install(cfg)[0]
+    assert not result.errors
+    assert (live_commit_dir / "snapshot" / "SKILL.md").is_file()
+    assert not stale_ds.parent.exists()
+
+    # Direct GC positive control: stale snapshot with .DS_Store is removed with zero warnings.
+    stale_ds2 = csk_home / "cache" / "stale-ds-2" / ("7" * 40) / "snapshot"
+    stale_ds2.mkdir(parents=True)
+    (stale_ds2.parent / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1")
+    warnings: list[str] = []
+    removed = gc._collect_snapshots(csk_home, {("skill-ds", live_commit_dir.name)}, warnings=warnings)
+    assert removed == 1
+    assert not stale_ds2.parent.exists()
+    assert not any("stale-ds-2" in w for w in warnings)
