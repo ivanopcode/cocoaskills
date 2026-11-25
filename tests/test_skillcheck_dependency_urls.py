@@ -13,6 +13,7 @@ import http.server
 import json
 import os
 import socket
+import sys
 import threading
 from dataclasses import dataclass, field
 from functools import partial
@@ -579,14 +580,37 @@ def test_network_probe_omits_credentials_extra_headers_and_cookies(
 ) -> None:
     loopback_host.publish("b", "v1")
     helper_marker = tmp_path / "helper-ran"
+    helper_script = tmp_path / "mark_helper.py"
+    helper_script.write_text(
+        f"from pathlib import Path\nPath({helper_marker.as_posix()!r}).write_text('ran', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
     cookie_file = tmp_path / "cookies.txt"
     cookie_file.write_text("127.0.0.1\tFALSE\t/\tFALSE\t2147483647\tsession\tsecret-cookie\n", encoding="utf-8")
+    # Forward slashes inside double quotes keep git config valid on Windows,
+    # where raw backslashes trigger Git's config escape parser.
+    py_posix = Path(sys.executable).as_posix()
+    script_posix = helper_script.as_posix()
+    cookie_posix = cookie_file.as_posix()
+    helper_cmd = f'!"{py_posix}" "{script_posix}"'
+    escaped_helper = helper_cmd.replace('"', '\\"')
     with open(loopback_host.gitconfig, "a", encoding="utf-8") as cfg_file:
         cfg_file.write(
-            f"[credential]\n helper = !touch '{helper_marker}'\n"
-            "[http]\n extraHeader = X-Secret: should-not-send\n"
-            f" cookieFile = {cookie_file}\n"
+            f'[credential]\n helper = "{escaped_helper}"\n'
+            '[http]\n extraHeader = "X-Secret: should-not-send"\n'
+            f' cookieFile = "{cookie_posix}"\n'
         )
+    # The fixture is effective only if Git can parse every appended setting.
+    assert (
+        run(["git", "config", "--file", str(loopback_host.gitconfig), "--get", "http.cookieFile"], tmp_path)
+        .stdout.strip()
+        == cookie_posix
+    )
+    assert (
+        run(["git", "config", "--file", str(loopback_host.gitconfig), "--get", "credential.helper"], tmp_path)
+        .stdout.strip()
+        == helper_cmd
+    )
     skill_dir = _write_skill_with_deps(tmp_path / "skill", {"dep-b": OLD.format("b")})
 
     rc = cli.main(["skill", "check", "--network", str(skill_dir)])
