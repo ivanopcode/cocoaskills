@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-11-25
+
 ### Fixed
 
 - Update `git_ops.fetch_repo` test stubs in the protocol lifecycle observation
